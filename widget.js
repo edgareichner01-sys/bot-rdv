@@ -1,6 +1,6 @@
 (function() {
     // --- CONFIGURATION ---
-    const API_URL = "http://127.0.0.1:8000/chat"; // Adresse de ton bot local
+const API_URL = "https://bot-rdv.onrender.com/chat";// Adresse du render
     // On récupère ou on crée un ID utilisateur unique pour ce visiteur
     let userId = localStorage.getItem("bot_user_id");
     if (!userId) {
