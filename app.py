@@ -1,8 +1,21 @@
 # --- Nouveaux imports pour Google ---
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
-import config  # On importe notre fichier de configuration
-# ------------------------------------
+import os
+
+# --- PATCH POUR RENDER ---
+# Si config.py existe (en local), on l'utilise.
+# Sinon (sur Render), on simule un objet config avec les variables d'environnement.
+try:
+    import config
+except ImportError:
+    class Config:
+        pass
+    config = Config()
+    config.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    config.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+    config.REDIRECT_URI = os.getenv("REDIRECT_URI")
+# -------------------------
 import os
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, RedirectResponse # <--- Indispensable pour lire les fichiers
@@ -11,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from db import init_db, ensure_default_client, save_message, get_recent_messages, save_google_credentials
 from bot_logic import handle_message
+from google_services import list_next_events
 
 app = FastAPI(title="Bot RDV - Palier 2")
 
@@ -141,3 +155,12 @@ async def google_callback(code: str):
     save_google_credentials(mon_client_id, creds_dict)
 
     return {"message": "🎉 VICTOIRE ! Token généré et sauvegardé en base de données. Le bot est prêt à travailler !"}
+
+# ==========================================
+# 🧪 ROUTE DE TEST (Pour voir si ça marche)
+# ==========================================
+@app.get("/test-agenda")
+def test_agenda():
+    # On teste avec "test_user" car c'est l'ID qu'on a utilisé pour la connexion admin
+    resultat = list_next_events("test_user")
+    return {"resultat": resultat}

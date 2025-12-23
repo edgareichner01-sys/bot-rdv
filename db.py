@@ -293,3 +293,25 @@ def save_google_credentials(client_id, credentials_dict):
     finally:
         cur.close()
         conn.close()
+
+def get_google_credentials(client_id):
+    """Récupère les identifiants Google pour un client donné"""
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        # On sélectionne la colonne google_credentials dans la table clients
+        query = f"SELECT google_credentials FROM clients WHERE id = {placeholder}"
+        cur.execute(query, (client_id,))
+        row = cur.fetchone()
+        
+        # On vérifie si on a un résultat et si la colonne contient des données
+        if row and row['google_credentials']:
+            return json.loads(row['google_credentials'])
+        return None
+    except Exception as e:
+        print(f"⚠️ Erreur lecture credentials : {e}")
+        return None
+    finally:
+        conn.close()
