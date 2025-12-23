@@ -1,7 +1,9 @@
 import sqlite3
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from config import DB_PATH
+
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -60,27 +62,27 @@ def init_db():
 def ensure_default_client(client_id: str):
     import json
     default_hours = {
-        "mon": {"start": "09:00", "end": "18:00"},
-        "tue": {"start": "09:00", "end": "18:00"},
-        "wed": {"start": "09:00", "end": "18:00"},
-        "thu": {"start": "09:00", "end": "18:00"},
-        "fri": {"start": "09:00", "end": "18:00"},
-        "sat": None,
-        "sun": None
-    }
-  default_faq = {
+    "mon": {"start": "09:00", "end": "18:00"},
+    "tue": {"start": "09:00", "end": "18:00"},
+    "wed": {"start": "09:00", "end": "18:00"},
+    "thu": {"start": "09:00", "end": "18:00"},
+    "fri": {"start": "09:00", "end": "18:00"}
+}
+
+default_faq = {
     "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
     "adresse": "Nous sommes au 12 rue de Paris, 75000 Paris.",
     "telephone": "Vous pouvez nous appeler au 01 23 45 67 89.",
     "email": "Vous pouvez nous écrire à contact@entreprise.fr.",
     "services": "Nous proposons : révision, vidange, pneus, freinage, diagnostic.",
     "paiement": "Nous acceptons la carte bancaire et les espèces.",
-    "rdv": "Vous pouvez prendre rendez-vous directement ici avec le chat.",
+    "rdv": "Vous pouvez prendre rendez-vous directement ici via le chat.",
     "duree": "Un rendez-vous dure en général entre 30 et 60 minutes selon la demande.",
     "annulation": "Vous pouvez annuler en répondant 'ANNULER' avant confirmation.",
     "parking": "Un parking est disponible à proximité.",
     "urgence": "En cas d’urgence, appelez-nous directement au téléphone."
 }
+
 
     }
 
