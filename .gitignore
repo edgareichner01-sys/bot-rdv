@@ -1,4 +1,9 @@
-.venv/
 __pycache__/
-app.db
+*.pyc
+.venv/
+venv/
 .env
+app.db
+config.py
+google_token.json
+credentials.json

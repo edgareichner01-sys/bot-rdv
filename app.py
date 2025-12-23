@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse # <--- Indispensabl
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from db import init_db, ensure_default_client, save_message, get_recent_messages
+from db import init_db, ensure_default_client, save_message, get_recent_messages, save_google_credentials
 from bot_logic import handle_message
 
 app = FastAPI(title="Bot RDV - Palier 2")
@@ -104,5 +104,40 @@ async def google_login():
 
 @app.get("/google/callback")
 async def google_callback(code: str):
-    # Google nous renvoie ici avec un "code" secret dans l'URL
-    return {"message": "🎉 SUCCÈS ! Google nous a répondu. Code reçu : " + code}
+    # 1. On configure le gestionnaire d'échange (exactement comme pour le login)
+    flow = Flow.from_client_config(
+        client_config={
+            "web": {
+                "client_id": config.GOOGLE_CLIENT_ID,
+                "client_secret": config.GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=['https://www.googleapis.com/auth/calendar.events'],
+        redirect_uri=config.REDIRECT_URI
+    )
+
+    # 2. On échange le CODE reçu contre des TOKENS (le vrai sésame)
+    flow.fetch_token(code=code)
+    
+    # 3. On récupère les infos utiles
+    credentials = flow.credentials
+    creds_dict = {
+        'token': credentials.token,
+        'refresh_token': credentials.refresh_token,
+        'token_uri': credentials.token_uri,
+        'client_id': credentials.client_id,
+        'client_secret': credentials.client_secret,
+        'scopes': credentials.scopes
+    }
+
+    # 4. SAUVEGARDE EN BASE DE DONNÉES !
+    # On utilise "test_user" pour être sûr que ça marche avec ton interface de test
+    mon_client_id = "test_user" 
+    
+    # On s'assure que le client existe avant de sauvegarder ses clés
+    ensure_default_client(mon_client_id)
+    save_google_credentials(mon_client_id, creds_dict)
+
+    return {"message": "🎉 VICTOIRE ! Token généré et sauvegardé en base de données. Le bot est prêt à travailler !"}

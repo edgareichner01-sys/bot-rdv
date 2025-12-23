@@ -247,3 +247,49 @@ def insert_appointment(client_id: str, user_id: str, name: str, date: str, time:
         conn.commit()
     finally:
         conn.close()
+
+
+# --- Ajoute ça à la fin de db.py ---
+
+# (Pas besoin de réimporter json ici, il est déjà en haut du fichier)
+
+def add_google_column_if_missing():
+    """Ajoute la colonne google_credentials si elle n'existe pas encore"""
+    conn = get_conn()  # <--- CORRECTION ICI (c'était get_db_connection)
+    cur = conn.cursor()
+    try:
+        # On essaie d'ajouter la colonne.
+        cur.execute("ALTER TABLE clients ADD COLUMN google_credentials TEXT;")
+        conn.commit()
+    except Exception as e:
+        # Si l'erreur est "la colonne existe déjà", on annule et on continue
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
+def save_google_credentials(client_id, credentials_dict):
+    """Sauvegarde les clés Google (sous forme de texte) pour un client"""
+    # 1. On s'assure que la colonne existe
+    add_google_column_if_missing()
+    
+    # 2. On transforme le dictionnaire (JSON) en texte
+    creds_json = json.dumps(credentials_dict)
+    
+    conn = get_conn()  # <--- CORRECTION ICI (c'était get_db_connection)
+    cur = conn.cursor()
+    
+    # Petite astuce : on vérifie si on est sur SQLite ou Postgres pour le placeholder
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        # On met à jour le client
+        query = f"UPDATE clients SET google_credentials = {placeholder} WHERE id = {placeholder}"
+        cur.execute(query, (creds_json, client_id))
+        conn.commit()
+        print(f"✅ Clés Google sauvegardées pour {client_id}")
+    except Exception as e:
+        print(f"❌ Erreur sauvegarde crédentials : {e}")
+    finally:
+        cur.close()
+        conn.close()
