@@ -68,10 +68,20 @@ def ensure_default_client(client_id: str):
         "sat": None,
         "sun": None
     }
-    default_faq = {
-        "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
-        "adresse": "Nous sommes en centre-ville. Dites-moi votre ville et je vous donne l’adresse exacte.",
-        "tarifs": "Les tarifs dépendent de la demande. Dites-moi ce que vous cherchez et je vous renseigne."
+  default_faq = {
+    "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
+    "adresse": "Nous sommes au 12 rue de Paris, 75000 Paris.",
+    "telephone": "Vous pouvez nous appeler au 01 23 45 67 89.",
+    "email": "Vous pouvez nous écrire à contact@entreprise.fr.",
+    "services": "Nous proposons : révision, vidange, pneus, freinage, diagnostic.",
+    "paiement": "Nous acceptons la carte bancaire et les espèces.",
+    "rdv": "Vous pouvez prendre rendez-vous directement ici avec le chat.",
+    "duree": "Un rendez-vous dure en général entre 30 et 60 minutes selon la demande.",
+    "annulation": "Vous pouvez annuler en répondant 'ANNULER' avant confirmation.",
+    "parking": "Un parking est disponible à proximité.",
+    "urgence": "En cas d’urgence, appelez-nous directement au téléphone."
+}
+
     }
 
     with get_conn() as conn:
