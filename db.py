@@ -60,31 +60,51 @@ def init_db():
         conn.commit()
 
 def ensure_default_client(client_id: str):
-    import json
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM clients WHERE id = ?", (client_id,))
+    exists = cur.fetchone()
+
+    if exists:
+        conn.close()
+        return
+
     default_hours = {
-    "mon": {"start": "09:00", "end": "18:00"},
-    "tue": {"start": "09:00", "end": "18:00"},
-    "wed": {"start": "09:00", "end": "18:00"},
-    "thu": {"start": "09:00", "end": "18:00"},
-    "fri": {"start": "09:00", "end": "18:00"}
-}
-
-default_faq = {
-    "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
-    "adresse": "Nous sommes au 12 rue de Paris, 75000 Paris.",
-    "telephone": "Vous pouvez nous appeler au 01 23 45 67 89.",
-    "email": "Vous pouvez nous écrire à contact@entreprise.fr.",
-    "services": "Nous proposons : révision, vidange, pneus, freinage, diagnostic.",
-    "paiement": "Nous acceptons la carte bancaire et les espèces.",
-    "rdv": "Vous pouvez prendre rendez-vous directement ici via le chat.",
-    "duree": "Un rendez-vous dure en général entre 30 et 60 minutes selon la demande.",
-    "annulation": "Vous pouvez annuler en répondant 'ANNULER' avant confirmation.",
-    "parking": "Un parking est disponible à proximité.",
-    "urgence": "En cas d’urgence, appelez-nous directement au téléphone."
-}
-
-
+        "mon": {"start": "09:00", "end": "18:00"},
+        "tue": {"start": "09:00", "end": "18:00"},
+        "wed": {"start": "09:00", "end": "18:00"},
+        "thu": {"start": "09:00", "end": "18:00"},
+        "fri": {"start": "09:00", "end": "18:00"}
     }
+
+    default_faq = {
+        "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
+        "adresse": "Nous sommes au 12 rue de Paris, 75000 Paris.",
+        "telephone": "Vous pouvez nous appeler au 01 23 45 67 89.",
+        "email": "Vous pouvez nous écrire à contact@entreprise.fr.",
+        "services": "Nous proposons : révision, vidange, pneus, freinage, diagnostic.",
+        "paiement": "Nous acceptons la carte bancaire et les espèces.",
+        "rdv": "Vous pouvez prendre rendez-vous directement ici via le chat.",
+        "duree": "Un rendez-vous dure en général entre 30 et 60 minutes selon la demande.",
+        "annulation": "Vous pouvez annuler en répondant 'ANNULER' avant confirmation.",
+        "parking": "Un parking est disponible à proximité.",
+        "urgence": "En cas d’urgence, appelez-nous directement au téléphone."
+    }
+
+    cur.execute(
+        "INSERT INTO clients (id, name, opening_hours_json, faq_json) VALUES (?, ?, ?, ?)",
+        (
+            client_id,
+            f"Client {client_id}",
+            json.dumps(default_hours),
+            json.dumps(default_faq)
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
 
     with get_conn() as conn:
         cur = conn.cursor()
