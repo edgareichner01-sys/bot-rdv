@@ -1,195 +1,249 @@
-import sqlite3
+import os
 import json
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
-from config import DB_PATH
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from datetime import datetime
+from config import DATABASE_URL
 
-
+# Fonction utilitaire pour se connecter
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    # Si c'est encore l'URL SQLite locale (cas de dev local sans Docker), on prévient
+    if DATABASE_URL.startswith("sqlite"):
+        import sqlite3
+        conn = sqlite3.connect("app.db", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    
+    # Sinon, c'est PostgreSQL (Render)
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def init_db():
-    with get_conn() as conn:
+    conn = get_conn()
+    
+    # Adaptation SQLite vs Postgres pour la création automatique des ID
+    # En Postgres, on utilise "SERIAL PRIMARY KEY". En SQLite "INTEGER PRIMARY KEY AUTOINCREMENT"
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+    id_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    
+    # Création des tables
+    create_clients = f"""
+    CREATE TABLE IF NOT EXISTS clients (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        opening_hours_json TEXT NOT NULL,
+        faq_json TEXT NOT NULL
+    )
+    """
+    
+    create_messages = f"""
+    CREATE TABLE IF NOT EXISTS messages (
+        id {id_type},
+        client_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """
+    
+    create_sessions = """
+    CREATE TABLE IF NOT EXISTS sessions (
+        client_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        draft_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (client_id, user_id)
+    )
+    """
+    
+    create_appointments = f"""
+    CREATE TABLE IF NOT EXISTS appointments (
+        id {id_type},
+        client_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        date TEXT NOT NULL,
+        time TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(client_id, date, time)
+    )
+    """
+
+    try:
         cur = conn.cursor()
-
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS clients (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            opening_hours_json TEXT NOT NULL,
-            faq_json TEXT NOT NULL
-        )
-        """)
-
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """)
-
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            client_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            stage TEXT NOT NULL,
-            draft_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (client_id, user_id)
-        )
-        """)
-
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS appointments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            date TEXT NOT NULL,
-            time TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(client_id, date, time)
-        )
-        """)
+        cur.execute(create_clients)
+        cur.execute(create_messages)
+        cur.execute(create_sessions)
+        cur.execute(create_appointments)
         conn.commit()
+    finally:
+        conn.close()
 
 def ensure_default_client(client_id: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
-
-    cur.execute("SELECT id FROM clients WHERE id = ?", (client_id,))
-    exists = cur.fetchone()
-
-    if exists:
-        conn.close()
-        return
-
-    default_hours = {
-        "mon": {"start": "09:00", "end": "18:00"},
-        "tue": {"start": "09:00", "end": "18:00"},
-        "wed": {"start": "09:00", "end": "18:00"},
-        "thu": {"start": "09:00", "end": "18:00"},
-        "fri": {"start": "09:00", "end": "18:00"}
-    }
-
-    default_faq = {
-        "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
-        "adresse": "Nous sommes au 12 rue de Paris, 75000 Paris.",
-        "telephone": "Vous pouvez nous appeler au 01 23 45 67 89.",
-        "email": "Vous pouvez nous écrire à contact@entreprise.fr.",
-        "services": "Nous proposons : révision, vidange, pneus, freinage, diagnostic.",
-        "paiement": "Nous acceptons la carte bancaire et les espèces.",
-        "rdv": "Vous pouvez prendre rendez-vous directement ici via le chat.",
-        "duree": "Un rendez-vous dure en général entre 30 et 60 minutes selon la demande.",
-        "annulation": "Vous pouvez annuler en répondant 'ANNULER' avant confirmation.",
-        "parking": "Un parking est disponible à proximité.",
-        "urgence": "En cas d’urgence, appelez-nous directement au téléphone."
-    }
-
-    cur.execute(
-        "INSERT INTO clients (id, name, opening_hours_json, faq_json) VALUES (?, ?, ?, ?)",
-        (
-            client_id,
-            f"Client {client_id}",
-            json.dumps(default_hours),
-            json.dumps(default_faq)
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM clients WHERE id = ?", (client_id,))
+    
+    # Syntax SQL: %s pour Postgres, ? pour SQLite
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        # Note: on utilise des tuples (valeur,) pour éviter les injections SQL
+        query_check = f"SELECT id FROM clients WHERE id = {placeholder}"
+        cur.execute(query_check, (client_id,))
         if cur.fetchone():
             return
-        cur.execute("""
-            INSERT INTO clients (id, name, opening_hours_json, faq_json)
-            VALUES (?, ?, ?, ?)
-        """, (client_id, f"Client {client_id}", json.dumps(default_hours), json.dumps(default_faq)))
-        conn.commit()
 
-def get_client_config(client_id: str) -> Dict[str, Any]:
-    import json
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
-        row = cur.fetchone()
+        default_hours = {
+            "mon": {"start": "09:00", "end": "18:00"},
+            "tue": {"start": "09:00", "end": "18:00"},
+            "wed": {"start": "09:00", "end": "18:00"},
+            "thu": {"start": "09:00", "end": "18:00"},
+            "fri": {"start": "09:00", "end": "18:00"}
+        }
+        
+        default_faq = {
+            "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
+            "adresse": "Nous sommes au 12 rue de Paris, 75000 Paris.",
+            "telephone": "01 23 45 67 89",
+            "email": "contact@garage-michel.fr"
+        }
+
+        query_insert = f"INSERT INTO clients (id, name, opening_hours_json, faq_json) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})"
+        cur.execute(
+            query_insert,
+            (client_id, f"Client {client_id}", json.dumps(default_hours), json.dumps(default_faq))
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_client_config(client_id: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        query = f"SELECT * FROM clients WHERE id = {placeholder}"
+        cur.execute(query, (client_id,))
+        row = cur.fetchone() 
         if not row:
-            raise ValueError("client_id inconnu")
+            # Fallback si le client n'existe pas encore
+            ensure_default_client(client_id)
+            return get_client_config(client_id)
+            
         return {
             "id": row["id"],
             "name": row["name"],
             "opening_hours": json.loads(row["opening_hours_json"]),
             "faq": json.loads(row["faq_json"]),
         }
+    finally:
+        conn.close()
 
 def save_message(client_id: str, user_id: str, role: str, content: str):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("""
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        query = f"""
             INSERT INTO messages (client_id, user_id, role, content, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (client_id, user_id, role, content, datetime.utcnow().isoformat()))
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+        """
+        cur.execute(query, (client_id, user_id, role, content, datetime.utcnow().isoformat()))
         conn.commit()
+    finally:
+        conn.close()
 
-def get_recent_messages(client_id: str, user_id: str, limit: int = 8) -> List[Dict[str, str]]:
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("""
+def get_recent_messages(client_id: str, user_id: str, limit: int = 8):
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        query = f"""
             SELECT role, content FROM messages
-            WHERE client_id=? AND user_id=?
+            WHERE client_id={placeholder} AND user_id={placeholder}
             ORDER BY id DESC
-            LIMIT ?
-        """, (client_id, user_id, limit))
+            LIMIT {limit}
+        """
+        cur.execute(query, (client_id, user_id))
         rows = cur.fetchall()
+        # On remet dans l'ordre chronologique
         return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+    finally:
+        conn.close()
 
 def upsert_session(client_id: str, user_id: str, stage: str, draft_json: str):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("""
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        # Syntaxe UPSERT compatible Postgres (ON CONFLICT)
+        query = f"""
             INSERT INTO sessions (client_id, user_id, stage, draft_json, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
             ON CONFLICT(client_id, user_id)
             DO UPDATE SET stage=excluded.stage, draft_json=excluded.draft_json, updated_at=excluded.updated_at
-        """, (client_id, user_id, stage, draft_json, datetime.utcnow().isoformat()))
+        """
+        cur.execute(query, (client_id, user_id, stage, draft_json, datetime.utcnow().isoformat()))
         conn.commit()
+    finally:
+        conn.close()
 
-def get_session(client_id: str, user_id: str) -> Dict[str, str]:
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT stage, draft_json FROM sessions WHERE client_id=? AND user_id=?", (client_id, user_id))
+def get_session(client_id: str, user_id: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        query = f"SELECT stage, draft_json FROM sessions WHERE client_id={placeholder} AND user_id={placeholder}"
+        cur.execute(query, (client_id, user_id))
         row = cur.fetchone()
         if not row:
             return {"stage": "idle", "draft_json": "{}"}
         return {"stage": row["stage"], "draft_json": row["draft_json"]}
+    finally:
+        conn.close()
 
 def clear_session(client_id: str, user_id: str):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM sessions WHERE client_id=? AND user_id=?", (client_id, user_id))
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        query = f"DELETE FROM sessions WHERE client_id={placeholder} AND user_id={placeholder}"
+        cur.execute(query, (client_id, user_id))
         conn.commit()
+    finally:
+        conn.close()
 
 def appointment_exists(client_id: str, date: str, time: str) -> bool:
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM appointments WHERE client_id=? AND date=? AND time=? LIMIT 1", (client_id, date, time))
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        query = f"SELECT 1 FROM appointments WHERE client_id={placeholder} AND date={placeholder} AND time={placeholder} LIMIT 1"
+        cur.execute(query, (client_id, date, time))
         return cur.fetchone() is not None
+    finally:
+        conn.close()
 
 def insert_appointment(client_id: str, user_id: str, name: str, date: str, time: str):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("""
+    conn = get_conn()
+    cur = conn.cursor()
+    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    
+    try:
+        query = f"""
             INSERT INTO appointments (client_id, user_id, name, date, time, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (client_id, user_id, name, date, time, datetime.utcnow().isoformat()))
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+        """
+        cur.execute(query, (client_id, user_id, name, date, time, datetime.utcnow().isoformat()))
         conn.commit()
+    finally:
+        conn.close()
