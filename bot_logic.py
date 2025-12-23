@@ -253,35 +253,40 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
         clear_session(client_id, user_id)
         return BotReply("D’accord, je ne confirme pas. Donne-moi une autre date/heure si tu veux réserver.", "ok")
 
-   # ---- 3) FAQ
-if intent == "FAQ":
-    msg = message.lower().strip()
+    # ---- 3) FAQ
+    if intent == "FAQ":
+        msg = message.lower().strip()
 
-    # Réponses directes basées sur mots-clés
-    if "horaire" in msg:
-        return BotReply(faq.get("horaires", "Horaires non disponibles."), "ok")
+        # Réponses directes basées sur mots-clés
+        if "horaire" in msg:
+            return BotReply(faq.get("horaires", "Horaires non disponibles."), "ok")
 
-    if "adresse" in msg or "où" in msg or "c'est où" in msg or "vous êtes où" in msg:
-        return BotReply(faq.get("adresse", "Adresse non disponible."), "ok")
+        if "adresse" in msg or "où" in msg or "c'est où" in msg or "vous êtes où" in msg:
+            return BotReply(faq.get("adresse", "Adresse non disponible."), "ok")
 
-    if "tarif" in msg or "prix" in msg or "combien" in msg or "coût" in msg:
-        return BotReply(faq.get("tarifs", "Tarifs non disponibles."), "ok")
+        if "tarif" in msg or "prix" in msg or "combien" in msg or "coût" in msg:
+            return BotReply(faq.get("tarifs", "Tarifs non disponibles."), "ok")
 
-    if "telephone" in msg or "téléphone" in msg or "tel" in msg or "numéro" in msg:
-        return BotReply(faq.get("telephone", "Téléphone non disponible."), "ok")
+        if "telephone" in msg or "téléphone" in msg or "tel" in msg or "numéro" in msg:
+            return BotReply(faq.get("telephone", "Téléphone non disponible."), "ok")
 
-    if "email" in msg or "mail" in msg:
-        return BotReply(faq.get("email", "Email non disponible."), "ok")
+        if "email" in msg or "mail" in msg:
+            return BotReply(faq.get("email", "Email non disponible."), "ok")
 
-    if "service" in msg or "prestation" in msg:
-        return BotReply(faq.get("services", "Services non disponibles."), "ok")
+        if "service" in msg or "prestation" in msg:
+            return BotReply(faq.get("services", "Services non disponibles."), "ok")
 
-    # Si l'IA a proposé une réponse, on la prend
-    answer = result.get("answer")
-    if answer:
-        return BotReply(answer, "ok")
+        # Réponse IA si dispo
+        answer = result.get("answer")
+        if answer:
+            return BotReply(answer, "ok")
 
-    return BotReply("Tu veux les **horaires**, l’**adresse**, les **tarifs**, le **téléphone** ou les **services** ?", "ok")
+        # ⚠️ RETURN FINAL OBLIGATOIRE
+        return BotReply(
+            "Tu veux les **horaires**, l’**adresse**, les **tarifs**, le **téléphone** ou les **services** ?",
+            "ok"
+        )
+
 
     # ---- 4) Prise de RDV (ou poursuite collecte)
     if intent == "BOOK_APPOINTMENT" or stage == "collecting":
