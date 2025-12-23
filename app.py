@@ -1,6 +1,11 @@
+# --- Nouveaux imports pour Google ---
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
+import config  # On importe notre fichier de configuration
+# ------------------------------------
 import os
 from fastapi import FastAPI
-from fastapi.responses import FileResponse # <--- Indispensable pour lire les fichiers
+from fastapi.responses import FileResponse, RedirectResponse # <--- Indispensable pour lire les fichiers
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -66,3 +71,38 @@ async def get_admin():
     if os.path.exists("admin.html"):
         return FileResponse("admin.html", media_type="text/html")
     return {"error": "Fichier admin.html introuvable"}
+
+# ==========================================
+# 🔐 ROUTES GOOGLE CALENDAR (Version FastAPI)
+# ==========================================
+
+@app.get("/google/login")
+async def google_login():
+    # On configure la demande de permission
+    flow = Flow.from_client_config(
+        client_config={
+            "web": {
+                "client_id": config.GOOGLE_CLIENT_ID,
+                "client_secret": config.GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        # On demande le droit de gérer les événements
+        scopes=['https://www.googleapis.com/auth/calendar.events'],
+        # IMPORTANT : Cela doit correspondre exactement à ce qu'il y a dans ta console Google
+        redirect_uri=config.REDIRECT_URI
+    )
+    
+    # On génère l'URL et on redirige l'utilisateur
+    authorization_url, state = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true'
+    )
+    return RedirectResponse(authorization_url)
+
+
+@app.get("/google/callback")
+async def google_callback(code: str):
+    # Google nous renvoie ici avec un "code" secret dans l'URL
+    return {"message": "🎉 SUCCÈS ! Google nous a répondu. Code reçu : " + code}

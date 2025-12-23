@@ -1,13 +1,17 @@
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# 1. Base de données
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///app.db")
 
-# Clés API
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+# 2. Configuration OpenAI
+# On enlève la vraie clé d'ici, Render la trouvera dans ses réglages secrets
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") 
+OPENAI_MODEL = "gpt-3.5-turbo"
 
-# Base de Données
-# Sur Render, l'URL commence parfois par "postgres://", mais Python veut "postgresql://"
-raw_db_url = os.getenv("DATABASE_URL", "sqlite:///./app.db").strip()
-DATABASE_URL = raw_db_url.replace("postgres://", "postgresql://")
+# 3. Configuration Google
+# Idem, on enlève les vraies clés
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+
+# 4. Adresse de retour
+REDIRECT_URI = "https://bot-rdv.onrender.com/google/callback"
