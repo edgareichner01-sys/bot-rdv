@@ -3,7 +3,15 @@ import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
-from config import DATABASE_URL
+
+# --- CORRECTION IMPORT ---
+# On essaie d'importer depuis config (local)
+# Si ça échoue (Render), on prend la variable d'environnement directement
+try:
+    from config import DATABASE_URL
+except ImportError:
+    DATABASE_URL = os.getenv("DATABASE_URL")
+# -------------------------
 
 # Fonction utilitaire pour se connecter
 def get_conn():

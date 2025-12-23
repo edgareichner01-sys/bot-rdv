@@ -1,10 +1,18 @@
 import json
 import re
+import os # <--- Ajout de l'import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
-from config import OPENAI_API_KEY, OPENAI_MODEL
+# --- CORRECTION IMPORT ---
+try:
+    from config import OPENAI_API_KEY, OPENAI_MODEL
+except ImportError:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    OPENAI_MODEL = "gpt-3.5-turbo"
+# -------------------------
+
 from db import (
     get_client_config,
     get_session,
