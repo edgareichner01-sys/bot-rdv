@@ -75,20 +75,11 @@ def suggest_next_time(time_str: str, minutes: int = 60) -> str:
 
 def fallback_intent(message: str) -> str:
     m = message.lower()
-
     if any(x in m for x in ["rdv", "rendez", "rendez-vous", "prendre", "réserver"]):
         return "BOOK_APPOINTMENT"
-    if any(x in m for x in ["horaire", "ouvert", "adresse", "tarif", "prix"]):
-        return "FAQ"
-    if m.strip() in ["oui", "ok", "d'accord", "je confirme"]:
-        return "CONFIRM"
-    if any(x in m for x in ["annuler", "cancel", "stop"]):
-        return "CANCEL"
-# Si le message contient une date ou une heure, on suppose que c'est pour un RDV
-if re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?\b", m) or re.search(r"\b(\d{1,2})(?:[:hH](\d{2}))?\b", m):
-    return "BOOK_APPOINTMENT"
 
-    return "OTHER"
+
+
 
 def extract_basic_info(message: str) -> Dict[str, Optional[str]]:
     data = {"name": None, "date": None, "time": None}
