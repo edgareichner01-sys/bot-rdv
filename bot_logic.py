@@ -68,6 +68,9 @@ def suggest_next_time(time_str: str, minutes: int = 60) -> str:
 
 def fallback_intent(message: str) -> str:
     m = message.lower()
+    # Mots-clés élargis pour l'annulation
+    if any(x in m for x in ["annuler", "cancel", "stop", "non", "pas de rdv", "pas besoin", "laisse tomber", "abort"]):
+        return "CANCEL"
     if any(x in m for x in ["rdv", "rendez", "rendez-vous", "prendre", "réserver"]):
         return "BOOK_APPOINTMENT"
     if any(x in m for x in ["horaire", "ouvert", "adresse", "tarif", "prix", "coût", "tel", "téléphone"]):
@@ -85,7 +88,7 @@ def extract_basic_info(message: str) -> Dict[str, Optional[str]]:
 
     # 2) Nom "libre"
     if not data["name"]:
-        blacklist = ["demain", "aujourd'hui", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche", "rdv", "rendez-vous"]
+        blacklist = ["demain", "aujourd'hui", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche", "rdv", "rendez-vous", "bonjour", "salut", "hello", "non", "oui", "stop"]
         if re.fullmatch(r"[a-zA-ZÀ-ÿ' -]{2,40}", msg) and not re.search(r"\d", msg):
             if msg.lower() not in blacklist:
                 words = [w for w in msg.split() if w]
@@ -221,7 +224,7 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
     stage = session["stage"]
     draft = json.loads(session["draft_json"] or "{}")
 
-    # Initialisation pour éviter les erreurs de variable non définie
+    # Initialisation
     changed = False
 
     # 1. ANALYSE (IA ou Regex)
@@ -234,18 +237,20 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
     extracted_date = result.get("date") or regex_data.get("date")
     extracted_time = result.get("time") or regex_data.get("time")
 
-    # --- CAS 1 : ANNULATION (Prioritaire) ---
-    if intent == "CANCEL" or msg in ["annuler", "cancel", "stop", "non"]:
+    # --- CAS 1 : ANNULATION (Prioritaire et Élargie) ---
+    # Liste de mots déclencheurs d'annulation plus complète
+    cancel_keywords = ["annuler", "cancel", "stop", "non", "pas de rdv", "pas besoin", "laisse tomber", "abort", "oublie", "quitter"]
+    
+    if intent == "CANCEL" or any(kw in msg for kw in cancel_keywords):
         clear_session(client_id, user_id)
         return BotReply("🚫 C'est noté, j'annule la demande. Dis-moi si tu as besoin d'autre chose.", "ok")
 
-    # --- CAS 2 : GESTION DE LA CONFIRMATION (Uniquement si on est en attente) ---
+    # --- CAS 2 : GESTION DE LA CONFIRMATION ---
     if stage == "confirming":
         # A) Confirmation explicite
         if intent == "CONFIRM" or msg in ["oui", "ok", "d'accord", "je confirme", "yes"]:
             name, date, time = draft.get("name"), draft.get("date"), draft.get("time")
             
-            # Vérif doublon ultime
             if appointment_exists(client_id, date, time):
                 alt = suggest_next_time(time, 60)
                 upsert_session(client_id, user_id, "collecting", json.dumps(draft))
@@ -255,22 +260,21 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
             clear_session(client_id, user_id)
             return BotReply(f"✅ C'est confirmé **{name}** ! RDV le **{date}** à **{time}**.", "ok")
 
-        # B) Modification implicite (ex: "Non plutôt 15h")
+        # B) Modification implicite
         if extracted_name: draft["name"] = extracted_name; changed = True
         if extracted_date: draft["date"] = extracted_date; changed = True
         if extracted_time: draft["time"] = extracted_time; changed = True
         
         if changed:
-            # On retourne en mode collecte pour valider les nouvelles infos
             upsert_session(client_id, user_id, "collecting", json.dumps(draft))
-            pass # On laisse le bloc "collecting" (plus bas) gérer la suite
+            pass 
         else:
             if intent == "FAQ":
                 clear_session(client_id, user_id)
             else:
                 return BotReply("Je n'ai pas compris. Réponds **OUI** pour confirmer le RDV, ou donne-moi une autre date.", "needs_info")
 
-    # --- CAS 3 : FAQ (Questions générales) ---
+    # --- CAS 3 : FAQ ---
     if intent == "FAQ":
         if "horaire" in msg: return BotReply(faq.get("horaires"), "ok")
         if "adresse" in msg: return BotReply(faq.get("adresse"), "ok")
@@ -281,19 +285,20 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
             
         return BotReply("Tu veux les horaires ou l'adresse ?", "ok")
 
-    # --- CAS 4 : PRISE DE RDV (Collecting) ---
-    # On y entre si l'intention est RDV, ou si on collectait déjà, ou si on a détecté un changement pendant la confirmation
+    # --- CAS 4 : PRISE DE RDV ---
     if intent == "BOOK_APPOINTMENT" or stage == "collecting" or (stage == "confirming" and changed):
+        # Reset simple : si on est en "collecting" mais que l'utilisateur dit juste "Bonjour" sans infos
+        # et que le draft est vide, on peut reset. Mais c'est risqué.
+        # Mieux : on s'en tient à la collecte.
+
         # Mise à jour du brouillon
         if extracted_name: draft["name"] = extracted_name
         if extracted_date: draft["date"] = extracted_date
         if extracted_time: draft["time"] = extracted_time
 
-        # Vérifications techniques
         if draft.get("date") and not valid_date(draft["date"]): draft["date"] = None
         if draft.get("time") and not valid_time(draft["time"]): draft["time"] = None
 
-        # Qu'est-ce qu'il manque ?
         missing = []
         if not draft.get("name"): missing.append("ton nom")
         if not draft.get("date"): missing.append("la date")
@@ -301,9 +306,10 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
 
         if missing:
             upsert_session(client_id, user_id, "collecting", json.dumps(draft))
+            # Petit ajout de politesse : si on boucle trop, on pourrait varier, mais restons simples.
             return BotReply(f"Ça marche. Il me manque juste : {', '.join(missing)}.", "needs_info")
 
-        # Vérifications métier (Passé, Horaires, Dispo)
+        # Vérifications
         if is_past(draft["date"], draft["time"]):
             return BotReply("Ce créneau est déjà passé. Choisis une date future.", "needs_info")
         
@@ -314,7 +320,7 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
             alt = suggest_next_time(draft["time"], 60)
             return BotReply(f"Ce créneau est déjà pris. Tu es dispo à **{alt}** ?", "needs_info")
 
-        # Tout est bon -> On demande confirmation
+        # Tout est bon -> Confirmation
         upsert_session(client_id, user_id, "confirming", json.dumps(draft))
         return BotReply(
             f"Je récapitule : RDV pour **{draft['name']}** le **{draft['date']}** à **{draft['time']}**.\nC'est bon pour toi ? (Réponds OUI)",
