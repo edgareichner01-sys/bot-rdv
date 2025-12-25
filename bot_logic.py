@@ -281,8 +281,7 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
         return BotReply("✅ Ok, j’annule la demande en cours. Si tu veux, donne-moi une autre date/heure.", "ok")
 
     # ---- 2) Si on est en attente de confirmation
-   if stage == "confirming":
-    msg = message.strip().lower()
+
 
     # 1) Annuler explicitement
     if intent == "CANCEL" or msg in ["annuler", "cancel", "stop", "non"]:
