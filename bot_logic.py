@@ -89,30 +89,70 @@ def fallback_intent(message: str) -> str:
 
 def extract_basic_info(message: str) -> Dict[str, Optional[str]]:
     data = {"name": None, "date": None, "time": None}
+    msg = message.strip()
 
-    # Nom
-    m_name = re.search(r"(je m'appelle|moi c'est|mon nom est)\s+([a-zA-ZÀ-ÿ ]+)", message, re.I)
+    # 1) Nom (phrases)
+    m_name = re.search(r"(je m'appelle|moi c'est|mon nom est)\s+([a-zA-ZÀ-ÿ' -]{2,})", msg, re.I)
     if m_name:
         data["name"] = m_name.group(2).strip()
+        return data  # on peut return tôt si on veut
 
-    # Date YYYY-MM-DD
-    m_date = re.search(r"\d{4}-\d{2}-\d{2}", message)
-    if m_date:
-        data["date"] = m_date.group(0)
+    # 2) Nom "libre" : si l'utilisateur répond juste "Edgar" / "Edgar Eichner"
+    #    (sans chiffres, 1 à 3 mots, pas trop long)
+    if data["name"] is None:
+        if re.fullmatch(r"[a-zA-ZÀ-ÿ' -]{2,40}", msg) and not re.search(r"\d", msg):
+            words = [w for w in msg.split() if w]
+            if 1 <= len(words) <= 3:
+                data["name"] = msg
 
-    # Heure HH:MM
-    m_time = re.search(r"\d{1,2}:\d{2}", message)
-    if m_time:
-        h = m_time.group(0)
-        if len(h.split(":")[0]) == 1:
-            h = "0" + h
-        data["time"] = h
+    # 3) Date ISO YYYY-MM-DD
+    m_date_iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", msg)
+    if m_date_iso:
+        data["date"] = m_date_iso.group(0)
 
-    # "demain"
-    if "demain" in message.lower():
+    # 4) Date FR : DD/MM/YYYY ou DD-MM-YYYY
+    if data["date"] is None:
+        m_date_fr = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", msg)
+        if m_date_fr:
+            d, m, y = m_date_fr.groups()
+            try:
+                data["date"] = datetime(int(y), int(m), int(d)).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+    # 5) Date FR sans année : DD/MM ou DD-MM -> année courante (si date passée -> +1 an)
+    if data["date"] is None:
+        m_date_no_year = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", msg)
+        if m_date_no_year:
+            d, m = m_date_no_year.groups()
+            y = datetime.now().year
+            try:
+                candidate = datetime(y, int(m), int(d))
+                if candidate.date() < datetime.now().date():
+                    candidate = datetime(y + 1, int(m), int(d))
+                data["date"] = candidate.strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+    # 6) Mots relatifs
+    lower = msg.lower()
+    if "demain" in lower:
         data["date"] = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    if "après-demain" in lower or "apres-demain" in lower:
+        data["date"] = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+
+    # 7) Heure : 14:30, 14h30, 14h, 9h, 9:05
+    m_time = re.search(r"\b(\d{1,2})(?:[:hH](\d{2}))?\b", msg)
+    if m_time:
+        hh = int(m_time.group(1))
+        mm = int(m_time.group(2) or 0)
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            data["time"] = f"{hh:02d}:{mm:02d}"
 
     return data
+
+
+  
 
 # =========================================================
 # STRUCTURE DE RÉPONSE
