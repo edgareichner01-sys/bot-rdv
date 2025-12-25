@@ -84,6 +84,9 @@ def fallback_intent(message: str) -> str:
         return "CONFIRM"
     if any(x in m for x in ["annuler", "cancel", "stop"]):
         return "CANCEL"
+# Si le message contient une date ou une heure, on suppose que c'est pour un RDV
+if re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?\b", m) or re.search(r"\b(\d{1,2})(?:[:hH](\d{2}))?\b", m):
+    return "BOOK_APPOINTMENT"
 
     return "OTHER"
 
@@ -278,28 +281,74 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
         return BotReply("✅ Ok, j’annule la demande en cours. Si tu veux, donne-moi une autre date/heure.", "ok")
 
     # ---- 2) Si on est en attente de confirmation
-    if stage == "confirming":
-        msg = message.strip().lower()
+   if stage == "confirming":
+    msg = message.strip().lower()
 
-        if intent == "CONFIRM" or msg in ["oui", "ok", "d'accord", "daccord", "je confirme"]:
-            # Finaliser le RDV
-            name = draft.get("name")
-            date = draft.get("date")
-            time = draft.get("time")
-
-            # re-check conflit
-            if appointment_exists(client_id, date, time):
-                clear_session(client_id, user_id)
-                alt = suggest_next_time(time, 60)
-                return BotReply(f"⚠️ Ce créneau vient d’être pris. Tu veux plutôt à **{alt}** ?", "needs_info")
-
-            insert_appointment(client_id, user_id, name, date, time)
-            clear_session(client_id, user_id)
-            return BotReply(f"✅ Rendez-vous confirmé pour **{name}** le **{date}** à **{time}**.", "ok")
-
-        # si pas "oui" -> on annule
+    # 1) Annuler explicitement
+    if intent == "CANCEL" or msg in ["annuler", "cancel", "stop", "non"]:
         clear_session(client_id, user_id)
-        return BotReply("D’accord, je ne confirme pas. Donne-moi une autre date/heure si tu veux réserver.", "ok")
+        return BotReply("D’accord, j’annule. Donne-moi une autre date/heure si tu veux réserver.", "ok")
+
+    # 2) Confirmer explicitement
+    if intent == "CONFIRM" or msg in ["oui", "ok", "d'accord", "daccord", "je confirme"]:
+        name = draft.get("name")
+        date = draft.get("date")
+        time = draft.get("time")
+
+        if appointment_exists(client_id, date, time):
+            # On garde la session mais on repasse en collecte
+            alt = suggest_next_time(time, 60)
+            upsert_session(client_id, user_id, "collecting", json.dumps(draft))
+            return BotReply(f"⚠️ Ce créneau vient d’être pris. Tu veux plutôt **{alt}** ?", "needs_info")
+
+        insert_appointment(client_id, user_id, name, date, time)
+        clear_session(client_id, user_id)
+        return BotReply(f"✅ Rendez-vous confirmé pour **{name}** le **{date}** à **{time}**.", "ok")
+
+    # 3) Sinon: l'utilisateur est probablement en train de modifier (ex: "à 14h", "13/01 à 10h")
+    # On tente d'extraire des infos depuis son message
+    mod = extract_basic_info(message)  # <-- utilise ta fonction améliorée
+
+    changed = False
+    if mod.get("name"):
+        draft["name"] = mod["name"]; changed = True
+    if mod.get("date"):
+        draft["date"] = mod["date"]; changed = True
+    if mod.get("time"):
+        draft["time"] = mod["time"]; changed = True
+
+    # Re-valider si besoin
+    if draft.get("date") and not valid_date(draft["date"]):
+        draft["date"] = None
+    if draft.get("time") and not valid_time(draft["time"]):
+        draft["time"] = None
+
+    if changed:
+        # On repasse en collecting puis on renvoie un récap + confirmation
+        upsert_session(client_id, user_id, "collecting", json.dumps(draft))
+        missing = []
+        if not draft.get("name"):
+            missing.append("ton nom")
+        if not draft.get("date"):
+            missing.append("la date (ex: demain, 13/01, 13/01/2026)")
+        if not draft.get("time"):
+            missing.append("l’heure (ex: 14h, 14h30)")
+
+        if missing:
+            return BotReply("Parfait 👍 Il me manque juste : " + ", ".join(missing) + ".", "needs_info")
+
+        # Tout est complet → demander confirmation à nouveau
+        upsert_session(client_id, user_id, "confirming", json.dumps(draft))
+        return BotReply(
+            f"Ok, je mets à jour : RDV pour **{draft['name']}** le **{draft['date']}** à **{draft['time']}**. "
+            f"Réponds **OUI** pour confirmer ou **ANNULER**.",
+            "needs_info"
+        )
+
+    # 4) Si aucune modif détectée → là seulement on annule
+    clear_session(client_id, user_id)
+    return BotReply("D’accord, je ne confirme pas. Donne-moi une autre date/heure si tu veux réserver.", "ok")
+
 
     # ---- 3) FAQ
     if intent == "FAQ":
