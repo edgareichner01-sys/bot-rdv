@@ -249,6 +249,7 @@ FAQ :
 # =========================================================
 
 def handle_message(client_id: str, user_id: str, message: str, history: List[Dict[str, str]]) -> BotReply:
+    msg = (message or "").strip().lower()
     cfg = get_client_config(client_id)
     opening_hours = cfg["opening_hours"]
     faq = cfg["faq"]
