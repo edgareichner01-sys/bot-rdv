@@ -101,3 +101,52 @@ def is_slot_available_google(client_id, date_str, time_str):
     except Exception as e:
         print(f"❌ Erreur check Google : {e}")
         return False
+
+def create_google_event(client_id, date_str, time_str, summary, description="Rendez-vous via Bot", duration_mins=60):
+    """
+    Crée un événement dans l'agenda Google.
+    Retourne le lien de l'événement si succès, None sinon.
+    """
+    service = get_calendar_service(client_id)
+    if not service:
+        print("❌ Erreur : Impossible de contacter le service Google.")
+        return None
+
+    # 1. Calcul des heures de début et de fin
+    # On s'assure que le format est correct pour Google (ISO 8601)
+    start_time = f"{date_str}T{time_str}Z"
+    
+    start_dt = datetime.datetime.fromisoformat(f"{date_str}T{time_str}")
+    end_dt = start_dt + datetime.timedelta(minutes=duration_mins)
+    end_time = f"{date_str}T{end_dt.strftime('%H:%M:%S')}Z"
+
+    # 2. Construction de l'objet Event
+    event_body = {
+        'summary': summary,
+        'description': description,
+        'start': {
+            'dateTime': start_time,
+            'timeZone': 'UTC',
+        },
+        'end': {
+            'dateTime': end_time,
+            'timeZone': 'UTC',
+        },
+        'reminders': {
+            'useDefault': True,
+        },
+    }
+
+    try:
+        # 3. Insertion dans l'agenda principal
+        created_event = service.events().insert(
+            calendarId='primary', 
+            body=event_body
+        ).execute()
+
+        print(f"✅ Événement créé avec succès : {created_event.get('htmlLink')}")
+        return created_event.get('htmlLink')
+
+    except Exception as e:
+        print(f"❌ Erreur lors de la création Google Calendar : {e}")
+        return None
