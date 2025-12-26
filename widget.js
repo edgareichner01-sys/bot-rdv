@@ -16,21 +16,41 @@
     // Tableau pour mémoriser la discussion
     let chatHistory = [];
 
-    // --- 1. CRÉATION DU DESIGN ---
+   // --- 1. CRÉATION DU DESIGN (VERSION PREMIUM) ---
     const bubble = document.createElement('div');
-    // ON ENLÈVE LE TEXTE : bubble.innerText = "💬"; 
+    // Supprimé : bubble.innerText = "💬"; (Plus besoin, le logo suffit)
 
     Object.assign(bubble.style, {
-        position: 'fixed', bottom: '20px', right: '20px', width: '60px', height: '60px',
-        borderRadius: '50%', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        position: 'fixed', bottom: '20px', right: '20px', 
+        width: '65px', height: '65px',
+        borderRadius: '50%', 
         cursor: 'pointer', zIndex: '9999',
         
-        // NOUVEAU DESIGN AVEC LOGO :
-        backgroundImage: 'url("https://bot-rdv.onrender.com/logo.png")', // L'adresse de ton image
-        backgroundSize: 'cover',   // L'image remplit tout le cercle
-        backgroundPosition: 'center', // L'image est centrée
-        backgroundColor: 'white' // Fond blanc propre derrière le logo si besoin
+        // Image de fond
+        backgroundImage: 'url("https://bot-rdv.onrender.com/logo.png")',
+        backgroundSize: '85%', // Le logo ne touche plus les bords (plus propre)
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+        backgroundColor: 'white',
+
+        // Ombre et bordure élégantes
+        boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+        border: '3px solid white',
+        
+        // Animation fluide
+        transition: 'transform 0.2s ease-in-out, box-shadow 0.2s'
     });
+
+    // Effet au survol (Inspire-toi des meilleurs)
+    bubble.onmouseover = () => {
+        bubble.style.transform = 'scale(1.1)'; // Le bouton grossit légèrement
+        bubble.style.boxShadow = '0 12px 30px rgba(0,0,0,0.2)';
+    };
+    bubble.onmouseout = () => {
+        bubble.style.transform = 'scale(1)';
+        bubble.style.boxShadow = '0 8px 24px rgba(0,0,0,0.15)';
+    };
+
     document.body.appendChild(bubble);
 
     const chatBox = document.createElement('div');
