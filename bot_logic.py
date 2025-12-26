@@ -51,8 +51,9 @@ def valid_time(time_str: str) -> bool:
         return False
 
 def is_past(date_str: str, time_str: str) -> bool:
+    # On compare sans les secondes pour éviter les faux positifs
     dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-    return dt < datetime.now()
+    return dt < datetime.now().replace(second=0, microsecond=0)
 
 def in_opening_hours(opening_hours: dict, date_str: str, time_str: str) -> bool:
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
@@ -83,29 +84,36 @@ def fallback_intent(message: str) -> str:
 def extract_basic_info(message: str) -> Dict[str, Optional[str]]:
     data = {"name": None, "date": None, "time": None}
     msg = message.strip()
+    lower = msg.lower()
+
+    # 1. EXTRACTION DU NOM AVEC PROTECTION
+    # On ajoute "un autre rdv" et les mots courants à la blacklist
+    blacklist = [
+        "demain", "aujourd'hui", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche", 
+        "rdv", "rendez-vous", "bonjour", "salut", "non", "oui", "stop", "un autre", "prendre", "horaires"
+    ]
 
     m_name = re.search(r"(je m'appelle|moi c'est|mon nom est)\s+([a-zA-ZÀ-ÿ' -]{2,})", msg, re.I)
     if m_name:
         data["name"] = m_name.group(2).strip()
-
+    
+    # Si pas de phrase type "Moi c'est...", on ne prend le message comme un nom 
+    # QUE s'il est court, sans chiffres, et pas dans la blacklist
     if not data["name"]:
-        blacklist = ["demain", "aujourd'hui", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche", "rdv", "rendez-vous", "bonjour", "salut", "non", "oui", "stop"]
-        if re.fullmatch(r"[a-zA-ZÀ-ÿ' -]{2,40}", msg) and not re.search(r"\d", msg):
-            if msg.lower() not in blacklist:
-                words = [w for w in msg.split() if w]
-                if 1 <= len(words) <= 3:
-                    data["name"] = msg
+        if len(msg.split()) <= 2 and lower not in blacklist and not any(char.isdigit() for char in msg):
+            # On vérifie aussi que ce n'est pas un message de commande
+            if len(msg) > 1: # Évite les lettres isolées
+                data["name"] = msg
 
+    # --- TES REGEX DE DATE ET HEURE (ON LES GARDE PRÉCIEUSEMENT) ---
     m_date_iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", msg)
-    if m_date_iso:
-        data["date"] = m_date_iso.group(0)
+    if m_date_iso: data["date"] = m_date_iso.group(0)
 
     if not data["date"]:
         m_date_fr = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", msg)
         if m_date_fr:
             d, m, y = m_date_fr.groups()
-            try:
-                data["date"] = datetime(int(y), int(m), int(d)).strftime("%Y-%m-%d")
+            try: data["date"] = datetime(int(y), int(m), int(d)).strftime("%Y-%m-%d")
             except ValueError: pass
 
     if not data["date"]:
@@ -115,12 +123,10 @@ def extract_basic_info(message: str) -> Dict[str, Optional[str]]:
             y = datetime.now().year
             try:
                 candidate = datetime(y, int(m), int(d))
-                if candidate.date() < datetime.now().date():
-                    candidate = datetime(y + 1, int(m), int(d))
+                if candidate.date() < datetime.now().date(): candidate = datetime(y + 1, int(m), int(d))
                 data["date"] = candidate.strftime("%Y-%m-%d")
             except ValueError: pass
 
-    lower = msg.lower()
     if "demain" in lower:
         data["date"] = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     if "après-demain" in lower:
@@ -175,83 +181,45 @@ def llm_intent_and_extract(message: str, faq: dict, history: list) -> dict:
 def handle_message(client_id: str, user_id: str, message: str, history: List[Dict[str, str]]) -> BotReply:
     msg = (message or "").strip().lower()
     cfg = get_client_config(client_id)
-    opening_hours = cfg["opening_hours"]
-    faq = cfg["faq"]
-
     session = get_session(client_id, user_id)
     stage = session["stage"]
     draft = json.loads(session["draft_json"] or "{}")
-    changed = False
 
-    # 1. ANALYSE
-    result = llm_intent_and_extract(message, faq, history)
-    intent = result.get("intent", "OTHER")
-    
+    # 1. ANALYSE ET SAUVEGARDE IMMÉDIATE
+    result = llm_intent_and_extract(message, cfg["faq"], history)
     regex_data = extract_basic_info(message)
-    extracted_name = result.get("name") or regex_data.get("name")
-    extracted_date = result.get("date") or regex_data.get("date")
-    extracted_time = result.get("time") or regex_data.get("time")
+    
+    # On met à jour le brouillon dès qu'une info tombe
+    if result.get("name") or regex_data.get("name"): 
+        draft["name"] = result.get("name") or regex_data.get("name")
+    if result.get("date") or regex_data.get("date"): 
+        draft["date"] = result.get("date") or regex_data.get("date")
+    if result.get("time") or regex_data.get("time"): 
+        draft["time"] = result.get("time") or regex_data.get("time")
 
-    # --- CAS 1 : ANNULATION ---
-    cancel_keywords = ["annuler", "cancel", "stop", "non", "pas de rdv", "pas besoin", "laisse tomber", "abort", "oublie", "quitter"]
-    if intent == "CANCEL" or any(kw in msg for kw in cancel_keywords):
+    # ACTION CRUCIALE : On enregistre en DB avant toute autre logique
+    upsert_session(client_id, user_id, stage, json.dumps(draft))
+
+    # CAS 1 : ANNULATION
+    if result.get("intent") == "CANCEL":
         clear_session(client_id, user_id)
-        return BotReply("🚫 C'est noté, j'annule tout.", "ok")
+        return BotReply("🚫 Annulé.", "ok")
 
-    # --- CAS 2 : CONFIRMATION ---
+    # CAS 2 : CONFIRMATION
     if stage == "confirming":
-        # A) Confirmation explicite
-        if intent == "CONFIRM" or msg in ["oui", "ok", "d'accord", "je confirme", "yes"]:
-            name, date, time = draft.get("name"), draft.get("date"), draft.get("time")
-            
-            # VERIF ULTIME : DB Locale + Google Agenda
-            is_taken_local = appointment_exists(client_id, date, time)
-            is_taken_google = not is_slot_available_google(client_id, date, time) # <-- Le Check Google
-
-            if is_taken_local or is_taken_google:
-                alt = suggest_next_time(time, 60)
-                upsert_session(client_id, user_id, "collecting", json.dumps(draft))
-                raison = "déjà pris dans ma base" if is_taken_local else "occupé sur votre Google Agenda"
-                return BotReply(f"⚠️ Aïe, ce créneau est {raison}. Tu veux plutôt **{alt}** ?", "needs_info")
-            
-            insert_appointment(client_id, user_id, name, date, time)
+        if msg in ["oui", "ok", "d'accord", "je confirme", "yes"]:
+            if not is_slot_available_google(client_id, draft["date"], draft["time"]):
+                return BotReply("⚠️ Finalement, l'agenda Google vient d'être pris. Une autre heure ?", "needs_info")
+            insert_appointment(client_id, user_id, draft["name"], draft["date"], draft["time"])
             clear_session(client_id, user_id)
-            return BotReply(f"✅ C'est confirmé **{name}** ! RDV le **{date}** à **{time}**.", "ok")
+            return BotReply(f"✅ Confirmé pour {draft['name']} !", "ok")
 
-        # B) Modification
-        if extracted_name: draft["name"] = extracted_name; changed = True
-        if extracted_date: draft["date"] = extracted_date; changed = True
-        if extracted_time: draft["time"] = extracted_time; changed = True
-        
-        if changed:
-            upsert_session(client_id, user_id, "collecting", json.dumps(draft))
-            pass 
-        else:
-            if intent == "FAQ":
-                clear_session(client_id, user_id)
-            else:
-                return BotReply("Je n'ai pas compris. Réponds **OUI** ou change l'heure.", "needs_info")
+    # CAS 3 : FAQ
+    if result.get("intent") == "FAQ":
+        return BotReply(result.get("answer") or "Je n'ai pas l'info.", "ok")
 
-    # --- CAS 3 : FAQ ---
-    if intent == "FAQ":
-        # ... (Logique FAQ habituelle) ...
-        if "horaire" in msg: return BotReply(faq.get("horaires"), "ok")
-        if "adresse" in msg: return BotReply(faq.get("adresse"), "ok")
-        if result.get("answer"): return BotReply(result.get("answer"), "ok")
-        # Petit message d'accueil sympa si on détecte "Bonjour" via fallback
-        if "bonjour" in msg or "salut" in msg:
-             return BotReply("Bonjour ! 👋 Je suis l'assistant du garage. Comment puis-je vous aider ?", "ok")
-        return BotReply("Tu veux les horaires ou l'adresse ?", "ok")
-
-    # --- CAS 4 : PRISE DE RDV ---
-    if intent == "BOOK_APPOINTMENT" or stage == "collecting" or (stage == "confirming" and changed):
-        if extracted_name: draft["name"] = extracted_name
-        if extracted_date: draft["date"] = extracted_date
-        if extracted_time: draft["time"] = extracted_time
-
-        if draft.get("date") and not valid_date(draft["date"]): draft["date"] = None
-        if draft.get("time") and not valid_time(draft["time"]): draft["time"] = None
-
+    # CAS 4 : PRISE DE RDV
+    if result.get("intent") == "BOOK_APPOINTMENT" or stage in ["collecting", "confirming"]:
         missing = []
         if not draft.get("name"): missing.append("ton nom")
         if not draft.get("date"): missing.append("la date")
@@ -259,29 +227,17 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
 
         if missing:
             upsert_session(client_id, user_id, "collecting", json.dumps(draft))
-            return BotReply(f"Ça marche. Il me manque juste : {', '.join(missing)}.", "needs_info")
+            return BotReply(f"Il me manque : {', '.join(missing)}.", "needs_info")
 
-        # Vérifications
+        # Validations (Passé / Ouverture / Google)
         if is_past(draft["date"], draft["time"]):
-            return BotReply("Ce créneau est passé.", "needs_info")
-        
-        if not in_opening_hours(opening_hours, draft["date"], draft["time"]):
+            return BotReply("Ce créneau est déjà passé. Choisis une autre date.", "needs_info")
+        if not in_opening_hours(cfg["opening_hours"], draft["date"], draft["time"]):
             return BotReply("Le garage est fermé à cette heure-là.", "needs_info")
-
-        # VERIF INTERMÉDIAIRE (Pour ne pas proposer un créneau pris)
-        # On vérifie Google ici aussi
         if not is_slot_available_google(client_id, draft["date"], draft["time"]):
-             alt = suggest_next_time(draft["time"], 60)
-             return BotReply(f"⚠️ Oups, l'agenda Google indique que c'est occupé à cette heure. Essaye vers **{alt}** ?", "needs_info")
-             
-        if appointment_exists(client_id, draft["date"], draft["time"]):
-            alt = suggest_next_time(draft["time"], 60)
-            return BotReply(f"Ce créneau est déjà pris (autre client). Tu es dispo à **{alt}** ?", "needs_info")
+            return BotReply("🚫 Ce créneau est occupé sur Google Agenda.", "needs_info")
 
         upsert_session(client_id, user_id, "confirming", json.dumps(draft))
-        return BotReply(
-            f"Je récapitule : RDV pour **{draft['name']}** le **{draft['date']}** à **{draft['time']}**.\nC'est bon ? (Réponds OUI)",
-            "needs_info"
-        )
+        return BotReply(f"RDV pour {draft['name']} le {draft['date']} à {draft['time']}. C'est bon ? (OUI)", "needs_info")
 
-    return BotReply("Je suis l'assistant du garage. Je peux te donner les horaires ou prendre un rendez-vous.", "ok")
+    return BotReply("Bonjour ! Comment puis-je vous aider ?", "ok")
