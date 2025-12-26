@@ -32,6 +32,11 @@ async def get_admin(): return FileResponse("admin.html")
 @app.get("/widget.js")
 async def get_widget(): return FileResponse("widget.js")
 
+@app.get("/demo")
+async def get_demo():
+    # Cette ligne renvoie le fichier HTML de votre widget de test
+    return FileResponse("test_client.html")
+
 @app.get("/google_login")
 async def google_login(client_id: str = "garage_michel_v6"):
     flow = get_flow()
