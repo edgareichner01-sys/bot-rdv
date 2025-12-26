@@ -29,18 +29,17 @@ def get_conn():
 def init_db():
     conn = get_conn()
     
-    # Adaptation SQLite vs Postgres pour la création automatique des ID
-    # En Postgres, on utilise "SERIAL PRIMARY KEY". En SQLite "INTEGER PRIMARY KEY AUTOINCREMENT"
     is_sqlite = DATABASE_URL.startswith("sqlite")
     id_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
     
-    # Création des tables
+    # ON AJOUTE 'google_credentials TEXT' ICI :
     create_clients = f"""
     CREATE TABLE IF NOT EXISTS clients (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         opening_hours_json TEXT NOT NULL,
-        faq_json TEXT NOT NULL
+        faq_json TEXT NOT NULL,
+        google_credentials TEXT
     )
     """
     
