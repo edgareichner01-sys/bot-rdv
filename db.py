@@ -276,29 +276,40 @@ def add_google_column_if_missing():
         conn.close()
 
 def save_google_credentials(client_id, credentials_dict):
-    """Sauvegarde les clés Google (sous forme de texte) pour un client"""
-    # 1. On s'assure que la colonne existe
+    """Sauvegarde les clés Google avec une logique de création automatique"""
     add_google_column_if_missing()
-    
-    # 2. On transforme le dictionnaire (JSON) en texte
     creds_json = json.dumps(credentials_dict)
-    
-    conn = get_conn()  # <--- CORRECTION ICI (c'était get_db_connection)
+    conn = get_conn()
     cur = conn.cursor()
     
-    # Petite astuce : on vérifie si on est sur SQLite ou Postgres pour le placeholder
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    is_sqlite = DATABASE_URL.startswith("sqlite")
     
     try:
-        # On met à jour le client
-        query = f"UPDATE clients SET google_credentials = {placeholder} WHERE id = {placeholder}"
-        cur.execute(query, (creds_json, client_id))
+        if is_sqlite:
+            # Logique SQLite : On essaie d'insérer, sinon on remplace
+            query = """
+                INSERT INTO clients (id, name, opening_hours_json, faq_json, google_credentials)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET google_credentials = excluded.google_credentials
+            """
+            # Valeurs par défaut si le client est nouveau
+            default_h = json.dumps({"mon":{"start":"09:00","end":"18:00"},"tue":{"start":"09:00","end":"18:00"},"wed":{"start":"09:00","end":"18:00"},"thu":{"start":"09:00","end":"18:00"},"fri":{"start":"09:00","end":"18:00"}})
+            default_f = json.dumps({"horaires":"9h-18h","adresse":"Paris"})
+            cur.execute(query, (client_id, client_id, default_h, default_f, creds_json))
+        else:
+            # Logique Postgres (Render)
+            query = """
+                INSERT INTO clients (id, name, opening_hours_json, faq_json, google_credentials)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT(id) DO UPDATE SET google_credentials = EXCLUDED.google_credentials
+            """
+            cur.execute(query, (client_id, client_id, "{}", "{}", creds_json))
+            
         conn.commit()
-        print(f"✅ Clés Google sauvegardées pour {client_id}")
+        print(f"✅ VRAIE SAUVEGARDE réussie pour {client_id}")
     except Exception as e:
-        print(f"❌ Erreur sauvegarde crédentials : {e}")
+        print(f"❌ Erreur critique BDD : {e}")
     finally:
-        cur.close()
         conn.close()
 
 def get_google_credentials(client_id):
