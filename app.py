@@ -1,34 +1,21 @@
-# --- Nouveaux imports pour Google ---
-from google_auth_oauthlib.flow import Flow
-from google.oauth2.credentials import Credentials
 import os
-
-# --- PATCH POUR RENDER ---
-# Si config.py existe (en local), on l'utilise.
-# Sinon (sur Render), on simule un objet config avec les variables d'environnement.
-try:
-    import config
-except ImportError:
-    class Config:
-        pass
-    config = Config()
-    config.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    config.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-    config.REDIRECT_URI = os.getenv("REDIRECT_URI")
-# -------------------------
-import os
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, RedirectResponse # <--- Indispensable pour lire les fichiers
+import json
+from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from google_auth_oauthlib.flow import Flow
 
-from db import init_db, ensure_default_client, save_message, get_recent_messages, save_google_credentials
+# --- IMPORTS DE TES FICHIERS ---
+from config import OPENAI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
+from db import init_db, get_session, upsert_session, save_google_credentials
 from bot_logic import handle_message
-from google_services import list_next_events
 
-app = FastAPI(title="Bot RDV - Palier 2")
+# Initialisation de l'app et de la DB
+app = FastAPI()
+init_db()
 
-# --- SÉCURITÉ : Autoriser tout le monde ---
+# Configuration CORS (pour que le widget marche partout)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,130 +24,135 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ChatIn(BaseModel):
-    client_id: str = Field(..., description="Identifiant de l'entreprise")
-    user_id: str = Field(..., description="Identifiant utilisateur")
-    message: str = Field(..., min_length=1, max_length=2000)
+# Configuration Google OAuth
+SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
-class ChatOut(BaseModel):
-    reply: str
-    status: str
-
-@app.on_event("startup")
-def startup():
-    init_db()
-
-# --- API (Le cerveau du bot) ---
-@app.post("/chat", response_model=ChatOut)
-def chat(payload: ChatIn):
-    ensure_default_client(payload.client_id)
-    history = get_recent_messages(payload.client_id, payload.user_id, limit=8)
-    save_message(payload.client_id, payload.user_id, "user", payload.message)
-    br = handle_message(payload.client_id, payload.user_id, payload.message, history)
-    save_message(payload.client_id, payload.user_id, "assistant", br.reply)
-    return ChatOut(reply=br.reply, status=br.status)
-
-# ============================================================
-# C'EST ICI QUE TU CRÉES LES PAGES POUR TON ASSOCIÉ
-# ============================================================
-
-# 1. Cette route permet d'accéder au script JS en ligne
-@app.get("/widget.js")
-async def get_widget():
-    # Vérifie que le fichier existe bien sur le serveur
-    if os.path.exists("widget.js"):
-        return FileResponse("widget.js", media_type="application/javascript")
-    return {"error": "Fichier widget.js introuvable"}
-
-# 2. Cette route crée la page de DÉMO accessible via URL
-@app.get("/demo")
-async def get_demo():
-    if os.path.exists("test_client.html"):
-        return FileResponse("test_client.html", media_type="text/html")
-    return {"error": "Fichier test_client.html introuvable"}
-
-# 3. Cette route crée la page ADMIN accessible via URL
-@app.get("/admin")
-async def get_admin():
-    if os.path.exists("admin.html"):
-        return FileResponse("admin.html", media_type="text/html")
-    return {"error": "Fichier admin.html introuvable"}
-
-# ==========================================
-# 🔐 ROUTES GOOGLE CALENDAR (Version FastAPI)
-# ==========================================
-
-@app.get("/google/login")
-async def google_login():
-    # On configure la demande de permission
-    flow = Flow.from_client_config(
-        client_config={
-            "web": {
-                "client_id": config.GOOGLE_CLIENT_ID,
-                "client_secret": config.GOOGLE_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
-        # On demande le droit de gérer les événements
-        scopes=['https://www.googleapis.com/auth/calendar.events'],
-        # IMPORTANT : Cela doit correspondre exactement à ce qu'il y a dans ta console Google
-        redirect_uri=config.REDIRECT_URI
-    )
-    
-    # On génère l'URL et on redirige l'utilisateur
-    authorization_url, state = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true'
-    )
-    return RedirectResponse(authorization_url)
-
-
-@app.get("/google/callback")
-async def google_callback(code: str):
-    # 1. On configure le gestionnaire d'échange (exactement comme pour le login)
-    flow = Flow.from_client_config(
-        client_config={
-            "web": {
-                "client_id": config.GOOGLE_CLIENT_ID,
-                "client_secret": config.GOOGLE_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
-        scopes=['https://www.googleapis.com/auth/calendar.events'],
-        redirect_uri=config.REDIRECT_URI
-    )
-
-    # 2. On échange le CODE reçu contre des TOKENS (le vrai sésame)
-    flow.fetch_token(code=code)
-    
-    # 3. On récupère les infos utiles
-    credentials = flow.credentials
-    creds_dict = {
-        'token': credentials.token,
-        'refresh_token': credentials.refresh_token,
-        'token_uri': credentials.token_uri,
-        'client_id': credentials.client_id,
-        'client_secret': credentials.client_secret,
-        'scopes': credentials.scopes
+def get_flow():
+    """Crée l'objet Flow pour l'authentification Google"""
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
     }
-
-    # 4. SAUVEGARDE EN BASE DE DONNÉES !
-    # On utilise "test_user" pour être sûr que ça marche avec ton interface de test
-    mon_client_id = "test_user" 
-    
-    # On s'assure que le client existe avant de sauvegarder ses clés
-    ensure_default_client(mon_client_id)
-    save_google_credentials(mon_client_id, creds_dict)
-
-    return {"message": "🎉 VICTOIRE ! Token généré et sauvegardé en base de données. Le bot est prêt à travailler !"}
+    flow = Flow.from_client_config(client_config, scopes=SCOPES)
+    flow.redirect_uri = GOOGLE_REDIRECT_URI
+    return flow
 
 # ==========================================
-# 🧪 ROUTE DE TEST (Pour voir si ça marche)
+# ROUTES PRINCIPALES
 # ==========================================
-@app.get("/test-agenda")
-def test_agenda():
-    # On teste avec "test_user" car c'est l'ID qu'on a utilisé pour la connexion admin
-    resultat = list_next_events("test_user")
-    return {"resultat": resultat}
+
+@app.get("/")
+async def home():
+    # Page d'accueil simple pour éviter l'erreur 404
+    return HTMLResponse("<h1>🤖 Le Bot est en ligne !</h1><p>Allez sur <a href='/admin'>/admin</a> pour configurer.</p>")
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page():
+    """Affiche la page d'administration"""
+    try:
+        with open("admin.html", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "Erreur : Fichier admin.html introuvable."
+
+@app.get("/test", response_class=HTMLResponse)
+async def test_page():
+    """Affiche la page de test du widget"""
+    try:
+        with open("test_client.html", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "Erreur : Fichier test_client.html introuvable."
+
+# ==========================================
+# ROUTE DE CONNEXION GOOGLE (Celle qui manquait !)
+# ==========================================
+
+@app.get("/google_login")
+async def google_login(client_id: str = "test_user"):
+    """
+    Démarre la connexion Google.
+    On passe le 'client_id' dans le paramètre 'state' pour le récupérer au retour.
+    """
+    flow = get_flow()
+    # On génère l'URL Google, et on cache le client_id dans le 'state'
+    auth_url, _ = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true',
+        prompt='consent',
+        state=client_id 
+    )
+    return RedirectResponse(auth_url)
+
+@app.get("/oauth2callback")
+async def oauth2callback(request: Request):
+    """
+    Google nous renvoie ici après la validation de l'utilisateur.
+    """
+    code = request.query_params.get("code")
+    # On récupère le client_id qu'on avait caché dans le state
+    client_id_recupere = request.query_params.get("state", "defaut")
+
+    if not code:
+        return JSONResponse({"error": "Pas de code reçu de Google."})
+
+    try:
+        flow = get_flow()
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+
+        # On sauvegarde les tokens dans la DB pour CE client spécifique
+        creds_dict = {
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": creds.scopes
+        }
+        
+        save_google_credentials(client_id_recupere, creds_dict)
+        
+        return JSONResponse({
+            "message": f"🎉 VICTOIRE ! Token généré et sauvegardé pour le client : {client_id_recupere}",
+            "status": "success"
+        })
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+# ==========================================
+# ROUTE DU CHATBOT (L'intelligence)
+# ==========================================
+
+@app.post("/chat")
+async def chat_endpoint(request: Request):
+    try:
+        data = await request.json()
+        user_message = data.get("message", "")
+        # L'ID client vient du widget, sinon "test_user" par défaut
+        client_id = request.query_params.get("clientID", "test_user")
+        # L'ID utilisateur (visiteur du site)
+        user_id = request.query_params.get("requestID", "unknown_visitor")
+
+        history = data.get("history", [])
+
+        # On lance le cerveau du bot
+        bot_response = handle_message(client_id, user_id, user_message, history)
+
+        return {
+            "reply": bot_response.reply,
+            "status": bot_response.status
+        }
+    except Exception as e:
+        print(f"🔥 ERREUR CRITIQUE DANS /chat : {e}")
+        return {"reply": "Oups, j'ai eu un petit bug technique.", "status": "error"}
+
+# Pour lancer en local (optionnel sur Render)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)
