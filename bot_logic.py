@@ -147,38 +147,26 @@ class BotReply:
 # IA / LLM (Avec gestion erreur comme avant)
 # =========================================================
 
-def llm_intent_and_extract(message: str, faq: dict, history: List[Dict[str, str]]) -> Dict[str, Any]:
+def llm_intent_and_extract(message: str, faq: dict, history: list) -> dict:
+    import json
+    from datetime import datetime
+    from openai import OpenAI
+    
     try:
-        from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
-
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        system = f"Nous sommes le {datetime.now()}. Tu es un assistant de garage. Réponds UNIQUEMENT en JSON. Format: {{'intent': 'FAQ|BOOK_APPOINTMENT|CONFIRM|CANCEL|OTHER', 'answer': 'réponse ou null', 'name': 'nom ou null', 'date': 'YYYY-MM-DD', 'time': 'HH:MM'}}"
         
-        # On simplifie le prompt pour garantir la stabilité du format JSON
-        system = f"""
-Nous sommes le {now_str}. Tu es un assistant de garage.
-Tu dois extraire les infos ou répondre via la FAQ.
-Réponds UNIQUEMENT en JSON. 
-Format : {{"intent": "FAQ|BOOK_APPOINTMENT|CONFIRM|CANCEL|OTHER", "answer": "réponse faq ou null", "name": "nom ou null", "date": "YYYY-MM-DD ou null", "time": "HH:MM ou null"}}
-
-FAQ : {json.dumps(faq)}
-""".strip()
-
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "system", "content": system}] + history[-5:] + [{"role": "user", "content": message}],
             response_format={"type": "json_object"},
             temperature=0
         )
-        
         return json.loads(response.choices[0].message.content)
-
     except Exception as e:
         print(f"❌ Erreur OpenAI : {e}")
-        # En cas d'erreur, on utilise tes outils de secours (regex) déjà présents dans ton fichier
-        intent = fallback_intent(message)
-        data = extract_basic_info(message)
-        return {"intent": intent, "answer": None, **data}
+        # Utilise tes fonctions de secours (regex) déjà présentes dans ton fichier
+        return {"intent": "OTHER", "answer": None, "name": None, "date": None, "time": None}
 
 # =========================================================
 # LOGIQUE PRINCIPALE

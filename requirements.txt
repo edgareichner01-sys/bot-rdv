@@ -8,3 +8,4 @@ python-dotenv
 sqlalchemy
 pydantic
 aiofiles
+psycopg2-binary
