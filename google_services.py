@@ -110,3 +110,5 @@ def is_slot_available_google(client_id, date_str, time_str):
         print(f"❌ Erreur check Google : {e}")
         # En cas d'erreur technique, on bloque par sécurité
         return False
+    
+    # test
