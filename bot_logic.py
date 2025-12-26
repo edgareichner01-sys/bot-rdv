@@ -148,62 +148,34 @@ class BotReply:
 # =========================================================
 
 def llm_intent_and_extract(message: str, faq: dict, history: List[Dict[str, str]]) -> Dict[str, Any]:
-    # 1. Vérification de la présence de la clé
-    if not OPENAI_API_KEY:
-        print("⚠️ ALERTE : Pas de clé OPENAI_API_KEY détectée dans le code !")
-        intent = fallback_intent(message)
-        data = extract_basic_info(message)
-        return {"intent": intent, "answer": None, **data}
-
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        faq_text = "\n".join([f"- {k}: {v}" for k, v in faq.items()])
-
-        # On simplifie le prompt pour garantir le JSON
+        
+        # On simplifie le prompt pour garantir la stabilité du format JSON
         system = f"""
-Nous sommes le {now_str}.
-Tu es un assistant de prise de rendez-vous pour un garage.
-Ton but est d'extraire les informations ou de répondre aux questions FAQ.
+Nous sommes le {now_str}. Tu es un assistant de garage.
+Tu dois extraire les infos ou répondre via la FAQ.
+Réponds UNIQUEMENT en JSON. 
+Format : {{"intent": "FAQ|BOOK_APPOINTMENT|CONFIRM|CANCEL|OTHER", "answer": "réponse faq ou null", "name": "nom ou null", "date": "YYYY-MM-DD ou null", "time": "HH:MM ou null"}}
 
-RÈGLES STRICTES DE RÉPONSE (JSON ONLY) :
-Tu dois répondre UNIQUEMENT avec un objet JSON valide. Pas de texte avant ni après.
-Format attendu :
-{{
-  "intent": "FAQ" | "BOOK_APPOINTMENT" | "CONFIRM" | "CANCEL" | "OTHER",
-  "answer": "Texte de la réponse si FAQ, sinon null",
-  "name": "Nom du client ou null",
-  "date": "YYYY-MM-DD ou null (convertis les 'lundi prochain', 'demain' etc)",
-  "time": "HH:MM ou null"
-}}
-
-FAQ du garage :
-{faq_text}
+FAQ : {json.dumps(faq)}
 """.strip()
 
-        input_messages = [{"role": "system", "content": system}]
-        for h in history[-6:]:
-            input_messages.append(h)
-        input_messages.append({"role": "user", "content": message})
-
-        print("🤖 Appel OpenAI Standard...") 
-        
-        # UTILISATION DE LA MÉTHODE STANDARD (ChatCompletion)
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            messages=input_messages,
-            response_format={"type": "json_object"}, # Force le mode JSON
+            messages=[{"role": "system", "content": system}] + history[-5:] + [{"role": "user", "content": message}],
+            response_format={"type": "json_object"},
             temperature=0
         )
         
-        content = response.choices[0].message.content
-        print(f"✅ Réponse OpenAI reçue : {content}")
-        return json.loads(content)
+        return json.loads(response.choices[0].message.content)
 
     except Exception as e:
-        print(f"❌ ERREUR CRITIQUE OPENAI : {str(e)}")
+        print(f"❌ Erreur OpenAI : {e}")
+        # En cas d'erreur, on utilise tes outils de secours (regex) déjà présents dans ton fichier
         intent = fallback_intent(message)
         data = extract_basic_info(message)
         return {"intent": intent, "answer": None, **data}
