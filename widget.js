@@ -18,11 +18,18 @@
 
     // --- 1. CRÉATION DU DESIGN ---
     const bubble = document.createElement('div');
-    bubble.innerText = "💬";
+    // ON ENLÈVE LE TEXTE : bubble.innerText = "💬"; 
+
     Object.assign(bubble.style, {
         position: 'fixed', bottom: '20px', right: '20px', width: '60px', height: '60px',
-        backgroundColor: '#2563EB', color: 'white', borderRadius: '50%', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '30px', zIndex: '9999'
+        borderRadius: '50%', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        cursor: 'pointer', zIndex: '9999',
+        
+        // NOUVEAU DESIGN AVEC LOGO :
+        backgroundImage: 'url("https://bot-rdv.onrender.com/logo.png")', // L'adresse de ton image
+        backgroundSize: 'cover',   // L'image remplit tout le cercle
+        backgroundPosition: 'center', // L'image est centrée
+        backgroundColor: 'white' // Fond blanc propre derrière le logo si besoin
     });
     document.body.appendChild(bubble);
 

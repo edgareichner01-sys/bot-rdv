@@ -32,6 +32,10 @@ async def get_admin(): return FileResponse("admin.html")
 @app.get("/widget.js")
 async def get_widget(): return FileResponse("widget.js")
 
+@app.get("/logo.png")
+async def get_logo():
+    return FileResponse("logo.png")
+
 @app.get("/demo")
 async def get_demo():
     # Cette ligne renvoie le fichier HTML de votre widget de test
