@@ -134,7 +134,7 @@
     bubble.onclick = () => {
         const isClosed = chatBox.style.display === 'none';
         chatBox.style.display = isClosed ? 'flex' : 'none';
-        bubble.innerText = isClosed ? "❌" : "💬";
+        bubble.innerText = isClosed ? "" : "";
     };
 
     sendBtn.onclick = sendMessage;
