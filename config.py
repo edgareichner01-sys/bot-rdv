@@ -6,7 +6,7 @@ load_dotenv()
 # Identifiant unique verrouillé pour l'instance
 CLIENT_ID = os.getenv("CLIENT_ID", "garage_michel_v6")
 
-# Configuration de la base de données
+# Configuration de la base de données (Postgres sur Render, SQLite en local)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///app.db")
 
 # Configuration OpenAI

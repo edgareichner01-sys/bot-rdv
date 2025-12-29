@@ -55,8 +55,9 @@ def in_opening_hours(opening_hours: dict, date_str: str, time_str: str) -> bool:
 def extract_regex_info(message: str) -> Dict[str, Optional[str]]:
     data = {"name": None, "date": None, "time": None}
     msg = message.strip()
-    m_name = re.search(r"(je m'appelle|moi c'est|mon nom est|c'est)\s+([a-zA-ZÀ-ÿ' -]{2,})", msg, re.I)
-    if m_name: data["name"] = m_name.group(2).strip()
+    # Capture du nom : Si message très court (1-2 mots) sans chiffres
+    if len(msg.split()) <= 2 and not any(c.isdigit() for c in msg) and msg.lower() not in ["rdv", "bonjour", "non"]:
+        data["name"] = msg
     m_date = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", msg)
     if m_date:
         d, m = map(int, m_date.groups())
@@ -75,11 +76,10 @@ def llm_process(message: str, history: list, faq_data: dict) -> dict:
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         system = (
-            f"Tu es l'assistant du Garage Michel. Voici les infos (FAQ): {json.dumps(faq_data)}. "
-            f"Date actuelle: {get_now_paris().strftime('%Y-%m-%d')}. "
-            "Réponds en JSON avec: {'intent': 'FAQ|BOOK_APPOINTMENT|CONFIRM|CANCEL', "
-            "'answer': 'Ta réponse au client s'il pose une question', 'name': 'null', 'date': 'YYYY-MM-DD', 'time': 'HH:MM'}. "
-            "Si l'utilisateur pose une question (tarifs, horaires, services), fournis la réponse dans 'answer'."
+            f"Tu es l'assistant du Garage Michel. Données FAQ : {json.dumps(faq_data)}. "
+            f"Aujourd'hui : {get_now_paris().strftime('%Y-%m-%d')}. "
+            "Réponds UNIQUEMENT en format json : {'intent': 'FAQ|BOOK_APPOINTMENT|CONFIRM|CANCEL', "
+            "'answer': 'Ta réponse à la question du client', 'name': 'null', 'date': 'YYYY-MM-DD', 'time': 'HH:MM'}"
         )
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -87,9 +87,7 @@ def llm_process(message: str, history: list, faq_data: dict) -> dict:
             response_format={"type": "json_object"}, temperature=0
         )
         return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        print(f"Erreur OpenAI: {e}")
-        return {"intent": "OTHER"}
+    except: return {"intent": "OTHER"}
 
 # --- CORE LOGIC ---
 def handle_message(client_id: str, user_id: str, message: str, history: List[Dict[str, str]]) -> BotReply:
@@ -99,46 +97,39 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
     draft = json.loads(session["draft_json"] or "{}")
     stage = session["stage"]
 
-    # 1. Pipeline d'intelligence (On passe la FAQ au LLM)
     llm_data = llm_process(message, history, cfg["faq"])
     regex_data = extract_regex_info(message)
     
-    # Capture du nom contextuelle
-    extracted_name = llm_data.get("name") or regex_data.get("name")
-    if stage == "collecting" and not draft.get("name") and len(msg_clean.split()) <= 2:
-        if not any(k in msg_clean for k in ["bonjour", "rdv", "horaires"]):
-            extracted_name = message.strip()
-
+    # Mise à jour sélective
     for key in ["name", "date", "time"]:
-        val = extracted_name if key == "name" else (llm_data.get(key) or regex_data.get(key))
+        val = llm_data.get(key) or regex_data.get(key)
         if val and str(val).lower() not in ["null", "none", "string", ""]:
             draft[key] = val
     
     upsert_session(client_id, user_id, stage, json.dumps(draft))
 
-    # 2. Intent Fallback
     intent = llm_data.get("intent", "OTHER")
-    if any(k in msg_clean for k in ["rdv", "rendez-vous", "réserver", "prendre"]):
-        intent = "BOOK_APPOINTMENT"
+    if any(k in msg_clean for k in ["rdv", "rendez-vous", "prendre"]): intent = "BOOK_APPOINTMENT"
 
-    # 3. Machine à états
-    if stage == "confirming" and any(word in msg_clean for word in ["oui", "ok", "d'accord", "yes"]):
-        # Double vérification : Google + SQL locale (Évite l'erreur 500 des logs)
+    # 1. Traitement de la Confirmation
+    if stage == "confirming" and any(word in msg_clean for word in ["oui", "ok", "d'accord"]):
+        # FIX : Vérification Doublon avant insertion
         if appointment_exists(client_id, draft["date"], draft["time"]) or not is_slot_available_google(client_id, draft["date"], draft["time"]):
-            return BotReply("🚫 Ce créneau vient d'être pris. Choisissez une autre heure.", "needs_info")
-        
+            return BotReply("🚫 Désolé, ce créneau a été pris entre temps. Un autre horaire ?", "needs_info")
+            
         if create_google_event(client_id, draft["date"], draft["time"], f"RDV - {draft['name']}"):
             insert_appointment(client_id, user_id, draft["name"], draft["date"], draft["time"])
             clear_session(client_id, user_id)
-            return BotReply(f"✅ **C'est tout bon, {draft['name']} !**\nRDV le {draft['date']} à {draft['time']}.", "ok")
+            return BotReply(f"✅ **C'est bon, {draft['name']} !**\nRDV le {draft['date']} à {draft['time']}.", "ok")
         return BotReply("❌ Erreur technique agenda.", "ok")
 
+    # 2. Logique de Prise de RDV
     if intent == "BOOK_APPOINTMENT" or stage in ["collecting", "confirming"]:
         missing = [m for m, v in [("votre nom", "name"), ("la date", "date"), ("l'heure", "time")] if not draft.get(v)]
+        
         if missing:
             upsert_session(client_id, user_id, "collecting", json.dumps(draft))
-            # Si le LLM a donné une réponse FAQ en plus, on l'affiche
-            prefix = f"{llm_data['answer']}\n\n" if llm_data.get("answer") else ""
+            prefix = f"{llm_data['answer']}\n\n" if llm_data.get("answer") and llm_data["answer"] != "null" else ""
             return BotReply(f"{prefix}Pour organiser cela, il me manque : {', '.join(missing)}.", "needs_info")
 
         if is_past(draft["date"], draft["time"]):
@@ -149,7 +140,7 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
         upsert_session(client_id, user_id, "confirming", json.dumps(draft))
         return BotReply(f"Je réserve pour **{draft['name']}** le **{draft['date']}** à **{draft['time']}**. C'est bon ? (OUI/NON)", "needs_info")
 
-    # 4. Traitement des questions (FAQ)
+    # 3. Réponse FAQ
     if llm_data.get("answer") and llm_data["answer"] != "null":
         return BotReply(llm_data["answer"], "ok")
 
