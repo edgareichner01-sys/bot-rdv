@@ -79,4 +79,22 @@ async def oauth2callback(request: Request):
 
     save_google_credentials(client_target, creds_dict)
     return HTMLResponse(f"<h1>✅ Succès</h1><p>Agenda lié pour {client_target}</p>")
+from fastapi.responses import FileResponse
+
+@app.get("/")
+async def root():
+    return {"ok": True}
+
+@app.get("/demo")
+async def get_demo():
+    return FileResponse("test_client.html")
+
+@app.get("/widget.js")
+async def get_widget():
+    return FileResponse("widget.js")
+
+@app.get("/logo.png")
+async def get_logo():
+    return FileResponse("logo.png")
+
     
