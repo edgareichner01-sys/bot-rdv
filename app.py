@@ -75,3 +75,8 @@ async def oauth2callback(request: Request):
 async def get_widget(): return FileResponse("widget.js")
 @app.get("/logo.png")
 async def get_logo(): return FileResponse("logo.png")
+
+# Ajoute cette ligne dans app.py
+@app.get("/demo")
+async def get_demo(): 
+    return FileResponse("test_client.html")
