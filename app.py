@@ -60,14 +60,20 @@ async def chat(request: Request):
 async def oauth2callback(request: Request):
     code = request.query_params.get("code")
     client_target = request.query_params.get("state", CLIENT_ID)
+
     flow = get_flow()
     flow.fetch_token(code=code)
-    save_google_credentials(client_target, flow.credentials.__dict__)
-    return HTMLResponse(f"<h1>✅ Succès</h1><p>Agenda lié pour {client_target}</p>")
 
-@app.get("/demo")
-async def get_demo(): return FileResponse("test_client.html")
-@app.get("/widget.js")
-async def get_widget(): return FileResponse("widget.js")
-@app.get("/logo.png")
-async def get_logo(): return FileResponse("logo.png")
+    creds = flow.credentials
+    creds_dict = {
+        "token": creds.token,
+        "refresh_token": creds.refresh_token,
+        "token_uri": creds.token_uri,
+        "client_id": creds.client_id,
+        "client_secret": creds.client_secret,
+        "scopes": list(creds.scopes) if creds.scopes else [],
+        "expiry": creds.expiry.isoformat() if creds.expiry else None,
+    }
+
+    save_google_credentials(client_target, creds_dict)
+    return HTMLResponse(f"<h1>✅ Succès</h1><p>Agenda lié pour {client_target}</p>")
