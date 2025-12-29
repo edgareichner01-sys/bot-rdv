@@ -30,7 +30,6 @@ class BotReply:
     status: str
 
 # --- ENGINE : VALIDATION ---
-
 def get_now_paris() -> datetime:
     return datetime.now(PARIS_TZ)
 
@@ -46,23 +45,18 @@ def in_opening_hours(opening_hours: dict, date_str: str, time_str: str) -> bool:
         day_key = DAYS[date_obj.weekday()]
         slot = opening_hours.get(day_key)
         if not slot: return False
-        t, s, e = [datetime.strptime(x, "%H:%M").time() for x in [time_str, slot["start"], slot["end"]]]
+        t = datetime.strptime(time_str, "%H:%M").time()
+        s = datetime.strptime(slot["start"], "%H:%M").time()
+        e = datetime.strptime(slot["end"], "%H:%M").time()
         return s <= t <= e
     except: return False
 
 # --- ENGINE : EXTRACTION ---
-
 def extract_regex_info(message: str) -> Dict[str, Optional[str]]:
     data = {"name": None, "date": None, "time": None}
     msg = message.strip()
-    lower = msg.lower()
-
-    # Capture du nom avec mots-clés (en bonus)
     m_name = re.search(r"(je m'appelle|moi c'est|mon nom est|c'est)\s+([a-zA-ZÀ-ÿ' -]{2,})", msg, re.I)
-    if m_name:
-        data["name"] = m_name.group(2).strip()
-
-    # Capture Date JJ/MM
+    if m_name: data["name"] = m_name.group(2).strip()
     m_date = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", msg)
     if m_date:
         d, m = map(int, m_date.groups())
@@ -70,29 +64,26 @@ def extract_regex_info(message: str) -> Dict[str, Optional[str]]:
         year = now.year + 1 if (m < now.month or (m == now.month and d < now.day)) else now.year
         try: data["date"] = datetime(year, m, d).strftime("%Y-%m-%d")
         except: pass
-
-    # Capture Heure HH:MM
-    m_time = re.search(r"\b(\d{1,2})[hH:](\d{2})?\b", lower)
+    m_time = re.search(r"\b(\d{1,2})[hH:](\d{2})?\b", msg.lower())
     if m_time:
         hh, mm = int(m_time.group(1)), int(m_time.group(2) or 0)
         if 0 <= hh < 24 and 0 <= mm < 60: data["time"] = f"{hh:02d}:{mm:02d}"
-            
     return data
 
-def llm_process(message: str, history: List[Dict[str, str]]) -> Dict[str, Any]:
+def llm_process(message: str, history: list, faq_data: dict) -> dict:
     from openai import OpenAI
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
-        # Le mot 'json' est obligatoire pour éviter l'erreur 400
-        prompt = (
-            f"Date: {get_now_paris().strftime('%Y-%m-%d')}. Assistant Garage Michel. "
-            "Extrais les infos au format json : {'intent': 'FAQ|BOOK_APPOINTMENT|CONFIRM|CANCEL', "
-            "'name': 'string|null', 'date': 'YYYY-MM-DD', 'time': 'HH:MM'}. "
-            "Si l'utilisateur salue simplement, le name est null."
+        system = (
+            f"Tu es l'assistant du Garage Michel. Voici les infos (FAQ): {json.dumps(faq_data)}. "
+            f"Date actuelle: {get_now_paris().strftime('%Y-%m-%d')}. "
+            "Réponds en JSON avec: {'intent': 'FAQ|BOOK_APPOINTMENT|CONFIRM|CANCEL', "
+            "'answer': 'Ta réponse au client s'il pose une question', 'name': 'null', 'date': 'YYYY-MM-DD', 'time': 'HH:MM'}. "
+            "Si l'utilisateur pose une question (tarifs, horaires, services), fournis la réponse dans 'answer'."
         )
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            messages=[{"role": "system", "content": prompt}] + history[-5:] + [{"role": "user", "content": message}],
+            messages=[{"role": "system", "content": system}] + history[-5:] + [{"role": "user", "content": message}],
             response_format={"type": "json_object"}, temperature=0
         )
         return json.loads(response.choices[0].message.content)
@@ -101,33 +92,23 @@ def llm_process(message: str, history: List[Dict[str, str]]) -> Dict[str, Any]:
         return {"intent": "OTHER"}
 
 # --- CORE LOGIC ---
-
 def handle_message(client_id: str, user_id: str, message: str, history: List[Dict[str, str]]) -> BotReply:
-    msg_clean = (message or "").strip()
-    msg_lower = msg_clean.lower()
+    msg_clean = (message or "").strip().lower()
     cfg = get_client_config(client_id)
     session = get_session(client_id, user_id)
     draft = json.loads(session["draft_json"] or "{}")
     stage = session["stage"]
 
-    # 1. Extraction initiale
-    llm_data = llm_process(message, history)
+    # 1. Pipeline d'intelligence (On passe la FAQ au LLM)
+    llm_data = llm_process(message, history, cfg["faq"])
     regex_data = extract_regex_info(message)
     
-    # 2. LOGIQUE DE CAPTURE DU NOM (Ta demande spécifique)
-    blacklist_salutations = ["bonjour", "bonsoir", "salut", "hello", "rdv", "rendez-vous", "rendez vous"]
-    
-    # On cherche d'abord si un nom est extrait explicitement
+    # Capture du nom contextuelle
     extracted_name = llm_data.get("name") or regex_data.get("name")
-    
-    # SI le bot a déjà demandé des infos ET qu'on n'a toujours pas de nom :
-    if stage == "collecting" and not draft.get("name"):
-        # SI ce n'est pas une salutation ET que ce n'est pas une date/heure :
-        if msg_lower not in blacklist_salutations and not regex_data.get("date") and not regex_data.get("time"):
-            # ALORS on considère que le message entier est le nom (ex: "Basile")
-            extracted_name = msg_clean
+    if stage == "collecting" and not draft.get("name") and len(msg_clean.split()) <= 2:
+        if not any(k in msg_clean for k in ["bonjour", "rdv", "horaires"]):
+            extracted_name = message.strip()
 
-    # Mise à jour du brouillon (ne jamais écraser par du vide)
     for key in ["name", "date", "time"]:
         val = extracted_name if key == "name" else (llm_data.get(key) or regex_data.get(key))
         if val and str(val).lower() not in ["null", "none", "string", ""]:
@@ -135,44 +116,41 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
     
     upsert_session(client_id, user_id, stage, json.dumps(draft))
 
-    # 3. Détection d'Intention
+    # 2. Intent Fallback
     intent = llm_data.get("intent", "OTHER")
-    if any(k in msg_lower for k in ["rdv", "rendez-vous", "prendre", "réserver"]):
+    if any(k in msg_clean for k in ["rdv", "rendez-vous", "réserver", "prendre"]):
         intent = "BOOK_APPOINTMENT"
 
-    if intent == "CANCEL" or msg_lower in ["annuler", "stop"]:
-        clear_session(client_id, user_id); return BotReply("🚫 Opération annulée.", "ok")
-
-    # 4. Machine à états
-    if stage == "confirming" and any(word in msg_lower for word in ["oui", "ok", "d'accord", "yes"]):
-        if not is_slot_available_google(client_id, draft["date"], draft["time"]):
-            return BotReply("⚠️ Créneau pris entre temps. Autre heure ?", "needs_info")
+    # 3. Machine à états
+    if stage == "confirming" and any(word in msg_clean for word in ["oui", "ok", "d'accord", "yes"]):
+        # Double vérification : Google + SQL locale (Évite l'erreur 500 des logs)
+        if appointment_exists(client_id, draft["date"], draft["time"]) or not is_slot_available_google(client_id, draft["date"], draft["time"]):
+            return BotReply("🚫 Ce créneau vient d'être pris. Choisissez une autre heure.", "needs_info")
+        
         if create_google_event(client_id, draft["date"], draft["time"], f"RDV - {draft['name']}"):
             insert_appointment(client_id, user_id, draft["name"], draft["date"], draft["time"])
             clear_session(client_id, user_id)
-            return BotReply(f"✅ **C'est bon, {draft['name']} !**\nRDV le {draft['date']} à {draft['time']}.", "ok")
-        return BotReply("❌ Erreur Google.", "ok")
+            return BotReply(f"✅ **C'est tout bon, {draft['name']} !**\nRDV le {draft['date']} à {draft['time']}.", "ok")
+        return BotReply("❌ Erreur technique agenda.", "ok")
 
     if intent == "BOOK_APPOINTMENT" or stage in ["collecting", "confirming"]:
-        # Vérification de ce qu'il manque
-        missing = []
-        if not draft.get("name"): missing.append("votre nom")
-        if not draft.get("date"): missing.append("la date")
-        if not draft.get("time"): missing.append("l'heure")
-        
+        missing = [m for m, v in [("votre nom", "name"), ("la date", "date"), ("l'heure", "time")] if not draft.get(v)]
         if missing:
             upsert_session(client_id, user_id, "collecting", json.dumps(draft))
-            return BotReply(f"Il me manque : {', '.join(missing)}.", "needs_info")
+            # Si le LLM a donné une réponse FAQ en plus, on l'affiche
+            prefix = f"{llm_data['answer']}\n\n" if llm_data.get("answer") else ""
+            return BotReply(f"{prefix}Pour organiser cela, il me manque : {', '.join(missing)}.", "needs_info")
 
-        # Validations
         if is_past(draft["date"], draft["time"]):
             return BotReply("📅 Ce créneau est déjà passé. Un autre horaire ?", "needs_info")
         if not in_opening_hours(cfg["opening_hours"], draft["date"], draft["time"]):
             return BotReply("Le garage est fermé à cette heure-là.", "needs_info")
-        if not is_slot_available_google(client_id, draft["date"], draft["time"]):
-            return BotReply("🚫 Ce créneau est déjà occupé.", "needs_info")
 
         upsert_session(client_id, user_id, "confirming", json.dumps(draft))
         return BotReply(f"Je réserve pour **{draft['name']}** le **{draft['date']}** à **{draft['time']}**. C'est bon ? (OUI/NON)", "needs_info")
 
-    return BotReply(llm_data.get("answer") or "Bonjour ! Comment puis-je vous aider ?", "ok")
+    # 4. Traitement des questions (FAQ)
+    if llm_data.get("answer") and llm_data["answer"] != "null":
+        return BotReply(llm_data["answer"], "ok")
+
+    return BotReply("Bonjour ! Comment puis-je vous aider ?", "ok")
