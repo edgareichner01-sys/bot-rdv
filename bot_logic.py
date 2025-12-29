@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
-
+from google_services import create_google_event
 # --- GESTION IMPORTS ---
 try:
     from config import OPENAI_API_KEY, OPENAI_MODEL
@@ -22,10 +22,10 @@ from db import (
 )
 
 # NOUVEAU : On importe le checker Google
-from google_services import is_slot_available_google
+from google_services import is_slot_available_google, create_google_event
 
 # =========================================================
-# OUTILS DE VALIDATION & EXTRACTION
+# OUTILS DE VALIDATION & EXTRACTIONinsert_appointment
 # =========================================================
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -205,14 +205,36 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
         clear_session(client_id, user_id)
         return BotReply("🚫 Annulé.", "ok")
 
-    # CAS 2 : CONFIRMATION
+           # CAS 2 : CONFIRMATION
     if stage == "confirming":
         if msg in ["oui", "ok", "d'accord", "je confirme", "yes"]:
             if not is_slot_available_google(client_id, draft["date"], draft["time"]):
                 return BotReply("⚠️ Finalement, l'agenda Google vient d'être pris. Une autre heure ?", "needs_info")
+
+            link = create_google_event(
+                client_id=client_id,
+                date_str=draft["date"],
+                time_str=draft["time"],
+                summary=f"RDV - {draft['name']}",
+                description=f"Rendez-vous pris via le bot pour {draft['name']}.",
+                duration_mins=60
+            )
+
+            if not link:
+                return BotReply(
+                    "❌ Je n’ai pas réussi à créer l’événement dans Google Agenda. "
+                    "Vérifie la connexion Google dans l’admin puis réessaie.",
+                    "needs_info"
+                )
+
             insert_appointment(client_id, user_id, draft["name"], draft["date"], draft["time"])
             clear_session(client_id, user_id)
-            return BotReply(f"✅ Confirmé pour {draft['name']} !", "ok")
+
+            return BotReply(
+                f"✅ Confirmé pour {draft['name']} !\n📅 Ajouté à Google Agenda : {link}",
+                "ok"
+            )
+
 
     # CAS 3 : FAQ
     if result.get("intent") == "FAQ":
@@ -229,7 +251,6 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
             upsert_session(client_id, user_id, "collecting", json.dumps(draft))
             return BotReply(f"Il me manque : {', '.join(missing)}.", "needs_info")
 
-        # Validations (Passé / Ouverture / Google)
         if is_past(draft["date"], draft["time"]):
             return BotReply("Ce créneau est déjà passé. Choisis une autre date.", "needs_info")
         if not in_opening_hours(cfg["opening_hours"], draft["date"], draft["time"]):
