@@ -4,332 +4,184 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
 
-# --- CORRECTION IMPORT ---
-# On essaie d'importer depuis config (local)
-# Si ça échoue (Render), on prend la variable d'environnement directement
+# --- GESTION DES IMPORTS ET CONFIG ---
 try:
     from config import DATABASE_URL
 except ImportError:
     DATABASE_URL = os.getenv("DATABASE_URL")
-# -------------------------
 
-# Fonction utilitaire pour se connecter
 def get_conn():
-    # Si c'est encore l'URL SQLite locale (cas de dev local sans Docker), on prévient
+    """Détecte automatiquement si on utilise SQLite (local) ou Postgres (Render)."""
     if DATABASE_URL.startswith("sqlite"):
         import sqlite3
         conn = sqlite3.connect("app.db", check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
-    
-    # Sinon, c'est PostgreSQL (Render)
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    return conn
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
     conn = get_conn()
-    
     is_sqlite = DATABASE_URL.startswith("sqlite")
     id_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
     
-    # ON AJOUTE 'google_credentials TEXT' ICI :
-    create_clients = f"""
-    CREATE TABLE IF NOT EXISTS clients (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        opening_hours_json TEXT NOT NULL,
-        faq_json TEXT NOT NULL,
-        google_credentials TEXT
-    )
-    """
-    
-    create_messages = f"""
-    CREATE TABLE IF NOT EXISTS messages (
-        id {id_type},
-        client_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT NOT NULL
-    )
-    """
-    
-    create_sessions = """
-    CREATE TABLE IF NOT EXISTS sessions (
-        client_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        stage TEXT NOT NULL,
-        draft_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (client_id, user_id)
-    )
-    """
-    
-    create_appointments = f"""
-    CREATE TABLE IF NOT EXISTS appointments (
-        id {id_type},
-        client_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        date TEXT NOT NULL,
-        time TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(client_id, date, time)
-    )
-    """
-
+    queries = [
+        """CREATE TABLE IF NOT EXISTS clients (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, 
+            opening_hours_json TEXT NOT NULL, faq_json TEXT NOT NULL, 
+            google_credentials TEXT)""",
+        f"""CREATE TABLE IF NOT EXISTS messages (
+            id {id_type}, client_id TEXT NOT NULL, user_id TEXT NOT NULL, 
+            role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)""",
+        """CREATE TABLE IF NOT EXISTS sessions (
+            client_id TEXT NOT NULL, user_id TEXT NOT NULL, 
+            stage TEXT NOT NULL, draft_json TEXT NOT NULL, updated_at TEXT NOT NULL, 
+            PRIMARY KEY (client_id, user_id))""",
+        f"""CREATE TABLE IF NOT EXISTS appointments (
+            id {id_type}, client_id TEXT NOT NULL, user_id TEXT NOT NULL, 
+            name TEXT NOT NULL, date TEXT NOT NULL, time TEXT NOT NULL, 
+            created_at TEXT NOT NULL, UNIQUE(client_id, date, time))"""
+    ]
     try:
         cur = conn.cursor()
-        cur.execute(create_clients)
-        cur.execute(create_messages)
-        cur.execute(create_sessions)
-        cur.execute(create_appointments)
+        for q in queries: cur.execute(q)
         conn.commit()
-    finally:
-        conn.close()
+    finally: conn.close()
 
 def ensure_default_client(client_id: str):
     conn = get_conn()
     cur = conn.cursor()
-    
-    # Syntax SQL: %s pour Postgres, ? pour SQLite
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        # Note: on utilise des tuples (valeur,) pour éviter les injections SQL
-        query_check = f"SELECT id FROM clients WHERE id = {placeholder}"
-        cur.execute(query_check, (client_id,))
-        if cur.fetchone():
-            return
-
-        default_hours = {
-            "mon": {"start": "09:00", "end": "18:00"},
-            "tue": {"start": "09:00", "end": "18:00"},
-            "wed": {"start": "09:00", "end": "18:00"},
-            "thu": {"start": "09:00", "end": "18:00"},
-            "fri": {"start": "09:00", "end": "18:00"}
-        }
+        cur.execute(f"SELECT id FROM clients WHERE id = {p}", (client_id,))
+        if cur.fetchone(): return
         
-        default_faq = {
-            "horaires": "Nous sommes ouverts du lundi au vendredi de 9h à 18h.",
-            "adresse": "Nous sommes au 12 rue de Paris, 75000 Paris.",
-            "telephone": "01 23 45 67 89",
-            "email": "contact@garage-michel.fr"
-        }
-
-        query_insert = f"INSERT INTO clients (id, name, opening_hours_json, faq_json) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})"
-        cur.execute(
-            query_insert,
-            (client_id, f"Client {client_id}", json.dumps(default_hours), json.dumps(default_faq))
-        )
+        # FIX : Horaires incluant le Samedi
+        hours = {"mon":{"start":"08:00","end":"18:00"}, "tue":{"start":"08:00","end":"18:00"},
+                 "wed":{"start":"08:00","end":"18:00"}, "thu":{"start":"08:00","end":"18:00"},
+                 "fri":{"start":"08:00","end":"18:00"}, "sat":{"start":"09:00","end":"13:00"}}
+        faq = {"horaires": "Lun-Ven 8h-18h, Sam 9h-13h.", "adresse": "Paris"}
+        
+        cur.execute(f"INSERT INTO clients (id, name, opening_hours_json, faq_json) VALUES ({p},{p},{p},{p})",
+                    (client_id, f"Garage {client_id}", json.dumps(hours), json.dumps(faq)))
         conn.commit()
-    finally:
-        conn.close()
+    finally: conn.close()
 
 def get_client_config(client_id: str):
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        query = f"SELECT * FROM clients WHERE id = {placeholder}"
-        cur.execute(query, (client_id,))
-        row = cur.fetchone() 
+        cur.execute(f"SELECT * FROM clients WHERE id = {p}", (client_id,))
+        row = cur.fetchone()
         if not row:
-            # Fallback si le client n'existe pas encore
             ensure_default_client(client_id)
             return get_client_config(client_id)
-            
-        return {
-            "id": row["id"],
-            "name": row["name"],
-            "opening_hours": json.loads(row["opening_hours_json"]),
-            "faq": json.loads(row["faq_json"]),
-        }
-    finally:
-        conn.close()
+        return {"id": row["id"], "name": row["name"], 
+                "opening_hours": json.loads(row["opening_hours_json"]), 
+                "faq": json.loads(row["faq_json"])}
+    finally: conn.close()
 
+# --- MESSAGES & HISTORIQUE ---
 def save_message(client_id: str, user_id: str, role: str, content: str):
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        query = f"""
-            INSERT INTO messages (client_id, user_id, role, content, created_at)
-            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-        """
-        cur.execute(query, (client_id, user_id, role, content, datetime.utcnow().isoformat()))
+        cur.execute(f"INSERT INTO messages (client_id, user_id, role, content, created_at) VALUES ({p},{p},{p},{p},{p})",
+                    (client_id, user_id, role, content, datetime.utcnow().isoformat()))
         conn.commit()
-    finally:
-        conn.close()
+    finally: conn.close()
 
 def get_recent_messages(client_id: str, user_id: str, limit: int = 8):
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        query = f"""
-            SELECT role, content FROM messages
-            WHERE client_id={placeholder} AND user_id={placeholder}
-            ORDER BY id DESC
-            LIMIT {limit}
-        """
-        cur.execute(query, (client_id, user_id))
-        rows = cur.fetchall()
-        # On remet dans l'ordre chronologique
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
-    finally:
-        conn.close()
+        cur.execute(f"SELECT role, content FROM messages WHERE client_id={p} AND user_id={p} ORDER BY id DESC LIMIT {limit}", 
+                    (client_id, user_id))
+        return [{"role": r["role"], "content": r["content"]} for r in reversed(cur.fetchall())]
+    finally: conn.close()
 
+# --- SESSIONS ---
 def upsert_session(client_id: str, user_id: str, stage: str, draft_json: str):
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        # Syntaxe UPSERT compatible Postgres (ON CONFLICT)
-        query = f"""
-            INSERT INTO sessions (client_id, user_id, stage, draft_json, updated_at)
-            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-            ON CONFLICT(client_id, user_id)
-            DO UPDATE SET stage=excluded.stage, draft_json=excluded.draft_json, updated_at=excluded.updated_at
-        """
+        query = f"""INSERT INTO sessions (client_id, user_id, stage, draft_json, updated_at) VALUES ({p},{p},{p},{p},{p})
+                    ON CONFLICT(client_id, user_id) DO UPDATE SET stage=EXCLUDED.stage, draft_json=EXCLUDED.draft_json, updated_at=EXCLUDED.updated_at"""
         cur.execute(query, (client_id, user_id, stage, draft_json, datetime.utcnow().isoformat()))
         conn.commit()
-    finally:
-        conn.close()
+    finally: conn.close()
 
 def get_session(client_id: str, user_id: str):
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        query = f"SELECT stage, draft_json FROM sessions WHERE client_id={placeholder} AND user_id={placeholder}"
-        cur.execute(query, (client_id, user_id))
+        cur.execute(f"SELECT stage, draft_json FROM sessions WHERE client_id={p} AND user_id={p}", (client_id, user_id))
         row = cur.fetchone()
-        if not row:
-            return {"stage": "idle", "draft_json": "{}"}
-        return {"stage": row["stage"], "draft_json": row["draft_json"]}
-    finally:
-        conn.close()
+        return {"stage": row["stage"], "draft_json": row["draft_json"]} if row else {"stage": "idle", "draft_json": "{}"}
+    finally: conn.close()
 
 def clear_session(client_id: str, user_id: str):
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        query = f"DELETE FROM sessions WHERE client_id={placeholder} AND user_id={placeholder}"
-        cur.execute(query, (client_id, user_id))
+        cur.execute(f"DELETE FROM sessions WHERE client_id={p} AND user_id={p}", (client_id, user_id))
         conn.commit()
-    finally:
-        conn.close()
+    finally: conn.close()
 
+# --- RENDEZ-VOUS ---
 def appointment_exists(client_id: str, date: str, time: str) -> bool:
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        query = f"SELECT 1 FROM appointments WHERE client_id={placeholder} AND date={placeholder} AND time={placeholder} LIMIT 1"
-        cur.execute(query, (client_id, date, time))
+        cur.execute(f"SELECT 1 FROM appointments WHERE client_id={p} AND date={p} AND time={p} LIMIT 1", (client_id, date, time))
         return cur.fetchone() is not None
-    finally:
-        conn.close()
+    finally: conn.close()
 
 def insert_appointment(client_id: str, user_id: str, name: str, date: str, time: str):
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        query = f"""
-            INSERT INTO appointments (client_id, user_id, name, date, time, created_at)
-            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-        """
-        cur.execute(query, (client_id, user_id, name, date, time, datetime.utcnow().isoformat()))
+        cur.execute(f"INSERT INTO appointments (client_id, user_id, name, date, time, created_at) VALUES ({p},{p},{p},{p},{p},{p})",
+                    (client_id, user_id, name, date, time, datetime.utcnow().isoformat()))
         conn.commit()
-    finally:
-        conn.close()
+    finally: conn.close()
 
-
-# --- Ajoute ça à la fin de db.py ---
-
-# (Pas besoin de réimporter json ici, il est déjà en haut du fichier)
-
+# --- GOOGLE ---
 def add_google_column_if_missing():
-    """Ajoute la colonne google_credentials si elle n'existe pas encore"""
-    conn = get_conn()  # <--- CORRECTION ICI (c'était get_db_connection)
+    conn = get_conn()
     cur = conn.cursor()
     try:
-        # On essaie d'ajouter la colonne.
         cur.execute("ALTER TABLE clients ADD COLUMN google_credentials TEXT;")
         conn.commit()
-    except Exception as e:
-        # Si l'erreur est "la colonne existe déjà", on annule et on continue
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
+    except Exception: conn.rollback()
+    finally: conn.close()
 
 def save_google_credentials(client_id, credentials_dict):
-    """Sauvegarde les clés Google avec une logique de création automatique"""
     add_google_column_if_missing()
-    creds_json = json.dumps(credentials_dict)
     conn = get_conn()
     cur = conn.cursor()
-    
-    is_sqlite = DATABASE_URL.startswith("sqlite")
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
+    h = json.dumps({"mon":{"start":"08:00","end":"18:00"}, "sat":{"start":"09:00","end":"13:00"}})
     try:
-        if is_sqlite:
-            # Logique SQLite : On essaie d'insérer, sinon on remplace
-            query = """
-                INSERT INTO clients (id, name, opening_hours_json, faq_json, google_credentials)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET google_credentials = excluded.google_credentials
-            """
-            # Valeurs par défaut si le client est nouveau
-            default_h = json.dumps({"mon":{"start":"09:00","end":"18:00"},"tue":{"start":"09:00","end":"18:00"},"wed":{"start":"09:00","end":"18:00"},"thu":{"start":"09:00","end":"18:00"},"fri":{"start":"09:00","end":"18:00"}})
-            default_f = json.dumps({"horaires":"9h-18h","adresse":"Paris"})
-            cur.execute(query, (client_id, client_id, default_h, default_f, creds_json))
-        else:
-            # Logique Postgres (Render)
-            query = """
-                INSERT INTO clients (id, name, opening_hours_json, faq_json, google_credentials)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT(id) DO UPDATE SET google_credentials = EXCLUDED.google_credentials
-            """
-            cur.execute(query, (client_id, client_id, "{}", "{}", creds_json))
-            
+        query = f"INSERT INTO clients (id, name, opening_hours_json, faq_json, google_credentials) VALUES ({p},{p},{p},'{{}}',{p}) ON CONFLICT(id) DO UPDATE SET google_credentials = EXCLUDED.google_credentials"
+        cur.execute(query, (client_id, client_id, h, json.dumps(credentials_dict)))
         conn.commit()
-        print(f"✅ VRAIE SAUVEGARDE réussie pour {client_id}")
-    except Exception as e:
-        print(f"❌ Erreur critique BDD : {e}")
-    finally:
-        conn.close()
+    finally: conn.close()
 
 def get_google_credentials(client_id):
-    """Récupère les identifiants Google pour un client donné"""
     conn = get_conn()
     cur = conn.cursor()
-    placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-    
+    p = "?" if DATABASE_URL.startswith("sqlite") else "%s"
     try:
-        # On sélectionne la colonne google_credentials dans la table clients
-        query = f"SELECT google_credentials FROM clients WHERE id = {placeholder}"
-        cur.execute(query, (client_id,))
+        cur.execute(f"SELECT google_credentials FROM clients WHERE id = {p}", (client_id,))
         row = cur.fetchone()
-        
-        # On vérifie si on a un résultat et si la colonne contient des données
-        if row and row['google_credentials']:
-            return json.loads(row['google_credentials'])
-        return None
-    except Exception as e:
-        print(f"⚠️ Erreur lecture credentials : {e}")
-        return None
-    finally:
-        conn.close()
+        return json.loads(row['google_credentials']) if row and row['google_credentials'] else None
+    except Exception: return None
+    finally: conn.close()
