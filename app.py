@@ -7,6 +7,7 @@ from google_auth_oauthlib.flow import Flow
 from config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, ADMIN_PASSWORD, CLIENT_ID
 from db import save_google_credentials, init_db, save_message
 from bot_logic import handle_message
+print("✅ LOADED:", __file__)
 
 app = FastAPI()
 security = HTTPBasic()
@@ -14,6 +15,7 @@ security = HTTPBasic()
 @app.on_event("startup")
 def startup_event():
     init_db()
+    print("✅ ROUTES:", [r.path for r in app.routes])
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
