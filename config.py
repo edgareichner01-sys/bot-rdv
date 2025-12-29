@@ -13,3 +13,5 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # L'adresse exacte validée dans ta console Google
 GOOGLE_REDIRECT_URI = "https://bot-rdv.onrender.com/oauth2callback"
+GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+# deploy trigger
