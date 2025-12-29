@@ -1,56 +1,19 @@
 (function() {
-    // --- CONFIGURATION ---
     const API_URL = "https://bot-rdv.onrender.com/chat";
-    
-    // On récupère ou on crée un ID utilisateur unique
-    let userId = localStorage.getItem("bot_user_id");
-    if (!userId) {
-        userId = "user_" + Math.random().toString(36).substr(2, 9);
-        localStorage.setItem("bot_user_id", userId);
-    }
+    let userId = localStorage.getItem("bot_user_id") || "user_" + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem("bot_user_id", userId);
 
-    // Récupération de l'ID du garage Michel
     const scriptTag = document.currentScript;
     const clientId = scriptTag.getAttribute("data-client-id") || "garage_michel_v6";
-
-    // Tableau pour mémoriser la discussion
     let chatHistory = [];
 
-   // --- 1. CRÉATION DU DESIGN (VERSION PREMIUM) ---
+    // --- DESIGN ---
     const bubble = document.createElement('div');
-    // Supprimé : bubble.innerText = "💬"; (Plus besoin, le logo suffit)
-
     Object.assign(bubble.style, {
-        position: 'fixed', bottom: '20px', right: '20px', 
-        width: '65px', height: '65px',
-        borderRadius: '50%', 
-        cursor: 'pointer', zIndex: '9999',
-        
-        // Image de fond
-        backgroundImage: 'url("https://bot-rdv.onrender.com/logo.png")',
-        backgroundSize: '85%', // Le logo ne touche plus les bords (plus propre)
-        backgroundPosition: 'center',
-        backgroundRepeat: 'no-repeat',
-        backgroundColor: 'white',
-
-        // Ombre et bordure élégantes
-        boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
-        border: '3px solid white',
-        
-        // Animation fluide
-        transition: 'transform 0.2s ease-in-out, box-shadow 0.2s'
+        position: 'fixed', bottom: '20px', right: '20px', width: '60px', height: '60px',
+        borderRadius: '50%', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', cursor: 'pointer', zIndex: '9999',
+        backgroundImage: 'url("https://bot-rdv.onrender.com/logo.png")', backgroundSize: 'cover', backgroundColor: 'white'
     });
-
-    // Effet au survol (Inspire-toi des meilleurs)
-    bubble.onmouseover = () => {
-        bubble.style.transform = 'scale(1.1)'; // Le bouton grossit légèrement
-        bubble.style.boxShadow = '0 12px 30px rgba(0,0,0,0.2)';
-    };
-    bubble.onmouseout = () => {
-        bubble.style.transform = 'scale(1)';
-        bubble.style.boxShadow = '0 8px 24px rgba(0,0,0,0.15)';
-    };
-
     document.body.appendChild(bubble);
 
     const chatBox = document.createElement('div');
@@ -61,34 +24,27 @@
     });
     document.body.appendChild(chatBox);
 
-    const header = document.createElement('div');
-    header.innerHTML = "Garage Michel 🤖";
-    Object.assign(header.style, { backgroundColor: '#2563EB', color: 'white', padding: '15px', fontWeight: 'bold' });
-    chatBox.appendChild(header);
-
     const messagesArea = document.createElement('div');
-    Object.assign(messagesArea.style, { flex: '1', padding: '15px', overflowY: 'auto', backgroundColor: '#f9f9f9', display: 'flex', flexDirection: 'column', gap: '10px' });
+    Object.assign(messagesArea.style, { flex: '1', padding: '15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', backgroundColor: '#f9f9f9' });
     chatBox.appendChild(messagesArea);
 
     const inputArea = document.createElement('div');
-    Object.assign(inputArea.style, { display: 'flex', borderTop: '1px solid #eee' });
+    inputArea.style.display = 'flex';
     chatBox.appendChild(inputArea);
 
     const inputField = document.createElement('input');
-    inputField.placeholder = "Écrivez ici...";
-    Object.assign(inputField.style, { flex: '1', padding: '15px', border: 'none', outline: 'none' });
+    Object.assign(inputField.style, { flex: '1', padding: '15px', border: 'none', outline: 'none', borderTop: '1px solid #eee' });
     inputArea.appendChild(inputField);
 
-    const sendBtn = document.createElement('button');
-    sendBtn.innerText = "➤";
-    Object.assign(sendBtn.style, { padding: '0 20px', backgroundColor: 'transparent', border: 'none', cursor: 'pointer', color: '#2563EB', fontSize: '18px' });
-    inputArea.appendChild(sendBtn);
-
-    // --- 2. LOGIQUE DE COMMUNICATION ---
-
+    // --- LOGIQUE RENDU HTML (POUR LIENS) ---
     function addMessage(text, sender) {
         const msgDiv = document.createElement('div');
-        msgDiv.innerText = text;
+        
+        // Transforme [Texte](Lien) en lien cliquable
+        let html = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:inherit; font-weight:bold; text-decoration:underline;">$1</a>');
+        html = html.replace(/\n/g, '<br>'); // Gère les sauts de ligne
+        
+        msgDiv.innerHTML = html;
         Object.assign(msgDiv.style, {
             maxWidth: '80%', padding: '10px', borderRadius: '10px', fontSize: '14px',
             alignSelf: sender === 'user' ? 'flex-end' : 'flex-start',
@@ -102,41 +58,23 @@
     async function sendMessage() {
         const text = inputField.value.trim();
         if (!text) return;
-
         addMessage(text, 'user');
         inputField.value = "";
-
-        // On construit l'URL avec les paramètres attendus par Python (clientID et requestID)
-        const targetUrl = `${API_URL}?clientID=${clientId}&requestID=${userId}`;
-
         try {
-            const response = await fetch(targetUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    message: text,
-                    history: chatHistory // Envoie l'historique pour l'intelligence
-                })
+            const res = await fetch(`${API_URL}?clientID=${clientId}&requestID=${userId}`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: text, history: chatHistory })
             });
-            const data = await response.json();
-            
+            const data = await res.json();
             addMessage(data.reply, 'bot');
-            
-            // Mise à jour de l'historique pour le prochain message
-            chatHistory.push({ role: "user", content: text });
-            chatHistory.push({ role: "assistant", content: data.reply });
-
-        } catch (error) {
-            addMessage("❌ Erreur de connexion.", 'bot');
-        }
+            chatHistory.push({ role: "user", content: text }, { role: "assistant", content: data.reply });
+        } catch { addMessage("❌ Erreur.", 'bot'); }
     }
 
     bubble.onclick = () => {
         const isClosed = chatBox.style.display === 'none';
         chatBox.style.display = isClosed ? 'flex' : 'none';
-        bubble.innerText = isClosed ? "" : "";
+        bubble.innerText = isClosed ? "❌" : "";
     };
-
-    sendBtn.onclick = sendMessage;
     inputField.onkeypress = (e) => { if (e.key === 'Enter') sendMessage(); };
 })();
