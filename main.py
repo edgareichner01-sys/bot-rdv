@@ -79,3 +79,4 @@ async def oauth2callback(request: Request):
 
     save_google_credentials(client_target, creds_dict)
     return HTMLResponse(f"<h1>✅ Succès</h1><p>Agenda lié pour {client_target}</p>")
+    
