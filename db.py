@@ -255,20 +255,34 @@ def appointment_exists(client_id: str, date: str, time: str) -> bool:
        conn.close()
 
 
-def insert_appointment(client_id: str, user_id: str, name: str, date: str, time: str):
-   conn = get_conn()
-   cur = conn.cursor()
-   placeholder = "?" if DATABASE_URL.startswith("sqlite") else "%s"
-  
-   try:
-       query = f"""
-           INSERT INTO appointments (client_id, user_id, name, date, time, created_at)
-           VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-       """
-       cur.execute(query, (client_id, user_id, name, date, time, datetime.utcnow().isoformat()))
-       conn.commit()
-   finally:
-       conn.close()
+def insert_appointment(client_id: str, user_id: str, name: str, date: str, time: str) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+
+    try:
+        if DATABASE_URL.startswith("sqlite"):
+            query = """
+                INSERT OR IGNORE INTO appointments (client_id, user_id, name, date, time, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """
+            cur.execute(query, (client_id, user_id, name, date, time, datetime.utcnow().isoformat()))
+            conn.commit()
+            return cur.rowcount == 1
+
+        else:
+            query = """
+                INSERT INTO appointments (client_id, user_id, name, date, time, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (client_id, date, time) DO NOTHING
+            """
+            cur.execute(query, (client_id, user_id, name, date, time, datetime.utcnow().isoformat()))
+            conn.commit()
+            return cur.rowcount == 1
+
+    finally:
+        conn.close()
+
+
 
 
 
