@@ -263,9 +263,10 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
 
 
            return BotReply(
-               f"✅ Confirmé pour {draft['name']} !\n📅 Ajouté à Google Agenda : {link}",
-               "ok"
-           )
+    f"✅ Confirmé pour {draft['name']} !\n📅 Votre rendez-vous est bien enregistré.",
+    "ok"
+)
+
 
 
 
