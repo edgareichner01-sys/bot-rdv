@@ -116,40 +116,42 @@
 
 
    async function sendMessage() {
-       const text = inputField.value.trim();
-       if (!text) return;
+    const text = inputField.value.trim();
+    if (!text) return;
 
+    addMessage(text, 'user');
+    inputField.value = "";
 
-       addMessage(text, 'user');
-       inputField.value = "";
+    const targetUrl = `${API_URL}?clientID=${clientId}&requestID=${userId}`;
 
+    try {
+        const response = await fetch(targetUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                message: text,
+                history: chatHistory
+            })
+        });
 
-       // On construit l'URL avec les paramètres attendus par Python (clientID et requestID)
-       const targetUrl = `${API_URL}?clientID=${clientId}&requestID=${userId}`;
+        if (!response.ok) {
+            const raw = await response.text();
+            console.error("API error:", response.status, raw);
+            addMessage("❌ Le serveur a eu un souci. Réessaie.", "bot");
+            return;
+        }
 
+        const data = await response.json();
+        addMessage(data.reply, "bot");
 
-       try {
-           const response = await fetch(targetUrl, {
-               method: "POST",
-               headers: { "Content-Type": "application/json" },
-               body: JSON.stringify({
-                   message: text,
-                   history: chatHistory // Envoie l'historique pour l'intelligence
-               })
-           });
-           const data = await response.json();
-          
-           addMessage(data.reply, 'bot');
-          
-           // Mise à jour de l'historique pour le prochain message
-           chatHistory.push({ role: "user", content: text });
-           chatHistory.push({ role: "assistant", content: data.reply });
+        chatHistory.push({ role: "user", content: text });
+        chatHistory.push({ role: "assistant", content: data.reply });
 
-
-       } catch (error) {
-           addMessage("❌ Erreur de connexion.", 'bot');
-       }
-   }
+    } catch (error) {
+        console.error("Network error:", error);
+        addMessage("❌ Problème réseau (connexion).", "bot");
+    }
+}
 
 
    bubble.onclick = () => {
