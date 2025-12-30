@@ -233,42 +233,49 @@ def handle_message(client_id: str, user_id: str, message: str, history: List[Dic
        return BotReply("🚫 Annulé.", "ok")
 
 
-          # CAS 2 : CONFIRMATION
+    # CAS 2 : CONFIRMATION
    if stage == "confirming":
-       if msg in ["oui", "ok", "d'accord", "je confirme", "yes"]:
-           if not is_slot_available_google(client_id, draft["date"], draft["time"]):
-               return BotReply("⚠️ Finalement, l'agenda Google vient d'être pris. Une autre heure ?", "needs_info")
+    if msg in ["oui", "ok", "d'accord", "je confirme", "yes"]:
 
+        if not is_slot_available_google(client_id, draft["date"], draft["time"]):
+            return BotReply(
+                "⚠️ Finalement, l'agenda Google vient d'être pris. Une autre heure ?",
+                "needs_info"
+            )
 
-           link = create_google_event(
-               client_id=client_id,
-               date_str=draft["date"],
-               time_str=draft["time"],
-               summary=f"RDV - {draft['name']}",
-               description=f"Rendez-vous pris via le bot pour {draft['name']}.",
-               duration_mins=60
-           )
+        inserted = insert_appointment(client_id, user_id, draft["name"], draft["date"], draft["time"])
+        if not inserted:
+            clear_session(client_id, user_id)
+            return BotReply(
+                f"✅ C’est déjà confirmé pour {draft['name']} le {draft['date']} à {draft['time']}.",
+                "ok"
+            )
 
+        link = create_google_event(
+            client_id=client_id,
+            date_str=draft["date"],
+            time_str=draft["time"],
+            summary=f"RDV - {draft['name']}",
+            description=f"Rendez-vous pris via le bot pour {draft['name']}.",
+            duration_mins=60
+        )
 
-           if not link:
-               return BotReply(
-                   "❌ Je n’ai pas réussi à créer l’événement dans Google Agenda. "
-                   "Vérifie la connexion Google dans l’admin puis réessaie.",
-                   "needs_info"
-               )
+        if not link:
+            return BotReply(
+                "❌ Je n'ai pas réussi à créer l'événement dans Google Agenda. "
+                "Vérifie la connexion Google dans l'admin puis réessaie.",
+                "needs_info"
+            )
 
+        clear_session(client_id, user_id)
+        return BotReply(
+            f"✅ Confirmé pour {draft['name']} !\n📅 Votre rendez-vous est bien enregistré.",
+            "ok"
+        )
 
-           insert_appointment(client_id, user_id, draft["name"], draft["date"], draft["time"])
-           clear_session(client_id, user_id)
-
-
-           return BotReply(
-    f"✅ Confirmé pour {draft['name']} !\n📅 Votre rendez-vous est bien enregistré.",
-    "ok"
-)
-
-
-
+    # si l'utilisateur ne confirme pas
+    clear_session(client_id, user_id)
+    return BotReply("❌ Annulé.", "ok")
 
 
    # CAS 3 : FAQ
