@@ -52,10 +52,12 @@ async def google_login(username: str = Depends(check_admin)):
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
+    client_id = request.query_params.get("clientID", CLIENT_ID)
     user_id = request.query_params.get("requestID", "visitor")
-    save_message(CLIENT_ID, user_id, "user", data.get("message", ""))
-    res = handle_message(CLIENT_ID, user_id, data.get("message", ""), data.get("history", []))
-    save_message(CLIENT_ID, user_id, "assistant", res.reply)
+    save_message(client_id, user_id, "user", data.get("message", ""))
+    res = handle_message(client_id, user_id, data.get("message", ""), data.get("history", []))
+    save_message(client_id, user_id, "assistant", res.reply)
+
     return {"reply": res.reply, "status": res.status}
 
 @app.get("/oauth2callback")
